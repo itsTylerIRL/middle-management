@@ -1,0 +1,115 @@
+# middlemanagementd configuration
+# Copy to ~/.config/middlemanagementd/config.yaml (or run `middlemanagementd config --init`).
+# Every key is optional; omitted keys use the defaults shown here.
+
+llm:
+  enabled: true
+  # Any OpenAI-compatible endpoint. Here: llama.cpp server on pepper.
+  base_url: http://pepper.local:8000/v1
+  model: local                    # llama.cpp ignores this; other servers may need a real name
+  api_key_env: MMD_LLM_API_KEY    # env var holding a key, if the endpoint needs one
+  connect_timeout_seconds: 5
+  timeout_seconds: 90
+  max_retries: 2
+  retry_backoff_seconds: 1.5
+  temperature: 0.9                # reprimands: creative
+  eval_temperature: 0.2           # grading: consistent
+  max_tokens_eval: 220
+  max_tokens_feedback: 140
+  max_tokens_monologue: 380       # level 4 meltdown
+  max_tokens_pip: 220
+  disable_thinking: true          # Qwen3-style <think> off; it's slow and nobody hears it
+  json_mode: true
+
+server:
+  host: 127.0.0.1                 # on deepdish: its tailnet IP, and set MMD_TOKEN
+  port: 8742
+  url: http://127.0.0.1:8742      # where the CLI and audio client reach the daemon
+  token_env: MMD_TOKEN            # shared bearer token, read from this env var
+
+scheduler:
+  enabled: true
+  min_interval_minutes: 45
+  max_interval_minutes: 150
+  frequency: 1.0                  # 2.0 = twice as often
+  quiet_hours:                    # HH:MM-HH:MM, may wrap midnight
+    - "21:30-08:30"
+  active_weekdays: [0, 1, 2, 3, 4]  # Mon=0 .. Sun=6; [] = every day
+  start_paused: false
+
+audio:                            # read by the audio client
+  output_device: default          # a PulseAudio/PipeWire sink name, see `middlemanagementd test-audio`
+  input_device: default           # a source name
+  volume: 0.6
+  max_volume: 0.85                # hard cap, enforced client-side (relative to the system volume)
+  chime_gain: 1.0
+  hold_music: true                # elevator jazz while the LLM deliberates
+  hold_music_gain: 0.45
+  max_utterance_seconds: 90       # no single playback may run longer
+
+listen:
+  speech_timeout_seconds: 60      # longest status report accepted
+  grace_period_seconds: 8         # time allowed to start talking
+  end_silence_seconds: 1.8        # this much silence ends your answer
+  min_speech_seconds: 0.4
+  energy_threshold: 0.010         # VAD RMS floor
+  noise_multiplier: 3.0           # VAD threshold = noise floor x this ...
+  max_threshold: 0.15             # ... but never more than this
+
+tts:
+  backend: piper                  # piper | espeak | none
+  voice_dir: ~/.local/share/middlemanagementd/voices
+  voice: en_US-ryan-high
+  length_scale: 1.0               # >1 slower, <1 faster (personalities adjust this too)
+  espeak_voice: en-us
+
+stt:
+  backend: faster-whisper
+  model: small.en                 # base.en is faster, medium.en more accurate
+  device: cpu                     # cuda needs CUDA 12 cuBLAS/cuDNN
+  compute_type: int8
+  beam_size: 1
+
+evaluation:
+  difficulty: normal              # intern | normal | director | executive
+  pass_thresholds: {intern: 45, normal: 58, director: 68, executive: 78}
+  llm_weight: 0.7                 # 0 = deterministic only, 1 = LLM only
+  weights:
+    jargon_density: 1.5
+    buzzword_diversity: 1.0
+    executive_confidence: 1.0
+    strategic_alignment: 1.0
+    stakeholder_awareness: 0.8
+    actionability_theater: 0.8
+    corporate_verbosity: 0.7
+    question_evasion: 1.2
+  jargon_dictionary: ""           # path to a custom dictionary; empty = bundled
+
+escalation:
+  aggressiveness: 1.0             # levels gained per failure; 0.5 = 50% chance, 2 = skip levels
+  decay_on_pass: 2
+  interrupt_enabled: true
+  interrupt_after_seconds:        # at this level and above, you get cut off after N seconds
+    3: 30
+    4: 12
+    5: 20
+  monologue_max_seconds: 75
+  pip_required_terms: 5
+  pip_terms_to_pass: 4
+  use_llm: true
+
+personality:
+  default: random                 # or: passive_aggressive, big_four, disappointed_vp,
+                                  #     scrum_master, linkedin, chief_synergy
+  enabled: [passive_aggressive, big_four, disappointed_vp, scrum_master, linkedin, chief_synergy]
+
+storage:
+  database_path: ~/.local/share/middlemanagementd/middlemanagementd.db
+  store_transcripts: true         # text only
+  keep_recordings: false          # raw audio is never written unless true
+  recordings_dir: ~/.local/share/middlemanagementd/recordings
+
+logging:
+  level: INFO
+  format: text                    # text | json
+  file: ""

@@ -1,0 +1,417 @@
+# middlemanagementd corporate jargon dictionary
+#
+# Phrases are matched case-insensitively on word boundaries, longest first, without overlap.
+# Scoring categories (count toward jargon density):
+#   buzzwords, strategy, stakeholders, action_theater, confidence, evasion
+# Modifier categories (do not count as jargon):
+#   hedges    - lower executive confidence
+#   concrete  - signal you accidentally said something useful; lower question evasion
+#
+# Add your own organisation's dialect freely. A single-word entry also matches a trailing "s".
+
+buzzwords:
+  - synergy
+  - synergies
+  - synergize
+  - synergistic
+  - leverage
+  - leveraging
+  - paradigm
+  - paradigm shift
+  - holistic
+  - holistically
+  - robust
+  - scalable
+  - at scale
+  - best-in-class
+  - best in class
+  - world-class
+  - cutting edge
+  - bleeding edge
+  - value-add
+  - value add
+  - value proposition
+  - low-hanging fruit
+  - move the needle
+  - moving the needle
+  - game changer
+  - game-changing
+  - mission-critical
+  - mission critical
+  - ecosystem
+  - disruptive
+  - disrupt
+  - innovative
+  - innovation
+  - empower
+  - empowering
+  - optimize
+  - optimizing
+  - streamline
+  - streamlining
+  - bandwidth
+  - deep dive
+  - double-click
+  - double click
+  - drill down
+  - boil the ocean
+  - think outside the box
+  - learnings
+  - ideate
+  - ideation
+  - net-net
+  - granular
+  - wheelhouse
+  - circle back
+  - circling back
+  - touch base
+  - unpack
+  - lean in
+  - pivot
+  - pivoting
+  - flywheel
+  - blue sky
+  - greenfield
+  - tiger team
+  - swim lane
+  - swim lanes
+  - guardrails
+  - table stakes
+  - secret sauce
+  - heavy lifting
+  - operationalize
+  - productize
+  - incentivize
+  - socialize
+  - evangelize
+  - democratize
+  - upskill
+  - right-size
+  - future-proof
+  - mindshare
+  - thought leadership
+  - best practices
+  - core competency
+  - core competencies
+  - headwinds
+  - tailwinds
+  - runway
+  - north star
+  - needle-moving
+  - impactful
+  - value creation
+  - win-win
+  - quick win
+  - quick wins
+  - force multiplier
+  - ballpark
+  - level set
+  - level-set
+  - peel back the onion
+  - open the aperture
+  - boots on the ground
+  - hit the ground running
+  - punch above our weight
+  - empowerment
+  - frictionless
+  - seamless
+  - seamlessly
+  - transformational
+
+strategy:
+  - strategic
+  - strategically
+  - strategy
+  - roadmap
+  - alignment
+  - aligned
+  - align
+  - aligning
+  - vision
+  - mission
+  - okr
+  - okrs
+  - kpi
+  - kpis
+  - priorities
+  - prioritize
+  - prioritization
+  - initiative
+  - initiatives
+  - pillar
+  - pillars
+  - framework
+  - frameworks
+  - enterprise
+  - transformation
+  - long-term value
+  - big picture
+  - objectives
+  - key results
+  - outcomes
+  - enablement
+  - operational excellence
+  - digital transformation
+  - go-to-market
+  - go to market
+  - product-market fit
+  - competitive advantage
+  - growth mindset
+  - value stream
+  - value streams
+  - north star metric
+  - strategic imperative
+  - strategic imperatives
+  - target state
+  - future state
+  - maturity model
+  - total addressable market
+  - shareholder value
+  - mandate
+
+stakeholders:
+  - stakeholder
+  - stakeholders
+  - cross-functional
+  - cross functional
+  - cross-functionally
+  - leadership
+  - leadership team
+  - partners
+  - partner teams
+  - customer-centric
+  - customer centric
+  - buy-in
+  - buy in
+  - executive sponsor
+  - key players
+  - decision makers
+  - end users
+  - customers
+  - matrixed
+  - all hands
+  - all-hands
+  - visibility
+  - transparency
+  - the business
+  - the org
+  - organizational
+  - org-wide
+  - interlock
+  - c-suite
+  - senior leadership
+  - skip level
+  - skip-level
+  - the broader team
+  - our partners
+  - internal customers
+  - champions
+
+action_theater:
+  - action item
+  - action items
+  - next steps
+  - deliverable
+  - deliverables
+  - milestone
+  - milestones
+  - timeline
+  - timelines
+  - cadence
+  - sprint
+  - sprints
+  - backlog
+  - workstream
+  - workstreams
+  - owner
+  - ownership
+  - accountable
+  - accountability
+  - execute
+  - execution
+  - driving
+  - drive
+  - unblock
+  - unblocking
+  - blocker
+  - blockers
+  - take it offline
+  - take this offline
+  - follow up
+  - follow-up
+  - sync
+  - sync up
+  - standup
+  - stand-up
+  - tracking
+  - on track
+  - in flight
+  - mobilize
+  - iterate
+  - iterative
+  - iterating
+  - agile
+  - mvp
+  - ship
+  - shipping
+  - velocity
+  - throughput
+  - deliver
+  - delivering
+  - de-risk
+  - derisk
+  - burn down
+  - burndown
+  - retro
+  - retrospective
+  - runbook
+  - playbook
+  - escalation path
+  - raci
+  - gantt
+  - status report
+  - checkpoint
+
+confidence:
+  - absolutely
+  - definitely
+  - clearly
+  - confident
+  - extremely confident
+  - without question
+  - i can assure
+  - rest assured
+  - excited
+  - incredibly
+  - bullish
+  - fully committed
+  - committed
+  - one hundred percent
+  - 100 percent
+  - laser-focused
+  - laser focused
+  - crushing it
+  - proactively
+  - proactive
+  - unequivocally
+  - make no mistake
+  - full confidence
+  - we will
+  - we're going to
+  - i own
+  - we own
+  - high conviction
+  - energized
+  - passionate
+
+evasion:
+  - it's a journey
+  - at the end of the day
+  - it depends
+  - more to come
+  - stay tuned
+  - high-level
+  - high level
+  - directionally
+  - directionally correct
+  - in the coming weeks
+  - in due course
+  - it's complicated
+  - evolving
+  - fluid
+  - nuanced
+  - ongoing
+  - exploring
+  - exploring options
+  - assessing
+  - evaluating
+  - workshop
+  - workshopping
+  - parking lot
+  - revisit
+  - tbd
+  - going forward
+  - moving forward
+  - in this space
+  - landscape
+  - the conversation
+  - having conversations
+  - socializing
+  - in the pipeline
+  - on the radar
+  - on our radar
+  - at this juncture
+  - as it were
+  - so to speak
+  - holistic view
+  - to that end
+  - with that said
+  - that being said
+  - lots of moving parts
+  - many moving pieces
+  - a number of factors
+  - various workstreams
+
+hedges:
+  - um
+  - uh
+  - er
+  - erm
+  - hmm
+  - i guess
+  - i think
+  - maybe
+  - sort of
+  - kind of
+  - not sure
+  - i'm not sure
+  - i don't know
+  - dunno
+  - sorry
+  - honestly
+  - i forgot
+  - i haven't
+  - no idea
+  - probably
+  - possibly
+  - hopefully
+  - i mean
+
+concrete:
+  - fixed
+  - finished
+  - done
+  - completed
+  - wrote
+  - merged
+  - deployed
+  - tested
+  - broke
+  - bug
+  - bugs
+  - error
+  - crash
+  - yesterday
+  - this morning
+  - commit
+  - pull request
+  - function
+  - file
+  - database
+  - server
+  - script
+  - because
+  - the answer is
+  - specifically
+  - exactly
+  - nothing
+  - lunch
+  - email
+  - emails
+  - meeting notes
+  - spreadsheet
+  - ticket
+  - refactored
+  - installed
+  - configured
+  - debugged

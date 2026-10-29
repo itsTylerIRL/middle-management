@@ -1,0 +1,22 @@
+# Core daemon. Install as a *user* unit on the host that runs the service (e.g. deepdish):
+#   cp systemd/middlemanagementd.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now middlemanagementd
+[Unit]
+Description=middlemanagementd - Corporate Alignment Enforcement Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Optional: MMD_TOKEN=... (shared secret for the API / audio client)
+EnvironmentFile=-%h/.config/middlemanagementd/env
+ExecStart=%h/middle-management/.venv/bin/middlemanagementd serve
+Restart=on-failure
+RestartSec=5
+# The kill switch is persisted in the database, so a restart never un-silences anything.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=default.target

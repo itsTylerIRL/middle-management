@@ -1,0 +1,22 @@
+# Audio client. Install as a *user* unit on the machine with the microphone/speakers (e.g. chef):
+#   cp systemd/middlemanagementd-audio.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now middlemanagementd-audio
+# Silence instantly with: middlemanagementd hush   (or: systemctl --user stop middlemanagementd-audio)
+[Unit]
+Description=middlemanagementd audio client (speakers, microphone, TTS, STT)
+After=pipewire-pulse.service network-online.target
+Wants=pipewire-pulse.service
+
+[Service]
+Type=simple
+EnvironmentFile=-%h/.config/middlemanagementd/env
+ExecStart=%h/middle-management/.venv/bin/middlemanagementd audio-client
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+# SIGTERM kills all playback before exiting.
+KillSignal=SIGTERM
+TimeoutStopSec=5
+
+[Install]
+WantedBy=default.target
