@@ -189,6 +189,45 @@ class Store:
         rows = self.db.execute("SELECT * FROM interrogations ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
         return [self._row(r) for r in rows]
 
+    def delete_interrogation(self, interrogation_id: int) -> bool:
+        """Remove one interrogation and rebuild everything derived from it."""
+        row = self.db.execute("SELECT * FROM interrogations WHERE id = ?", (interrogation_id,)).fetchone()
+        if row is None:
+            return False
+        newest = self.db.execute("SELECT MAX(id) FROM interrogations").fetchone()[0]
+        if row["points"] <= FAIL_POINTS + PIP_POINTS:
+            # This failure issued a PIP (just before it was recorded); the PIP goes with it.
+            self.db.execute("DELETE FROM pips WHERE id = (SELECT id FROM pips WHERE ts <= ? ORDER BY ts DESC LIMIT 1)",
+                            (row["ts"],))
+        self.db.execute("DELETE FROM interrogations WHERE id = ?", (interrogation_id,))
+        self.set("barge_ins", max(0, int(self.get("barge_ins", 0)) - row["barge_ins"]))
+        if row["id"] == newest:
+            last = self.db.execute("SELECT level_after FROM interrogations ORDER BY id DESC LIMIT 1").fetchone()
+            self.level = last["level_after"] if last else 0
+        self._rebuild_derived()
+        return True
+
+    def reset(self) -> None:
+        """Wipe history, reviews, PIPs and everything derived from them. Pause/kill switch state is kept."""
+        for table in ("interrogations", "buzzwords", "pips", "reviews"):
+            self.db.execute(f"DELETE FROM {table}")
+        self.db.execute("DELETE FROM kv WHERE key IN ('streak', 'best_streak', 'barge_ins', 'escalation_level')")
+        self.db.commit()
+
+    def _rebuild_derived(self) -> None:
+        """Recompute buzzword counts and streaks from the interrogations that remain."""
+        self.db.execute("DELETE FROM buzzwords")
+        streak = best = 0
+        for r in self.db.execute("SELECT passed, jargon_json FROM interrogations ORDER BY id").fetchall():
+            for term in set(json.loads(r["jargon_json"])):
+                self.db.execute("INSERT INTO buzzwords(term, count) VALUES(?, 1) "
+                                "ON CONFLICT(term) DO UPDATE SET count = count + 1", (term,))
+            streak = streak + 1 if r["passed"] else 0
+            best = max(best, streak)
+        self.set("streak", streak)
+        self.set("best_streak", best)
+        self.db.commit()
+
     def between(self, start: float, end: float) -> list[dict[str, Any]]:
         """Interrogations with start <= ts < end, oldest first."""
         rows = self.db.execute("SELECT * FROM interrogations WHERE ts >= ? AND ts < ? ORDER BY ts",
@@ -236,6 +275,11 @@ class Store:
     def review(self, review_id: int) -> dict[str, Any] | None:
         row = self.db.execute("SELECT * FROM reviews WHERE id = ?", (review_id,)).fetchone()
         return self._review_row(row) if row else None
+
+    def delete_review(self, review_id: int) -> bool:
+        cur = self.db.execute("DELETE FROM reviews WHERE id = ?", (review_id,))
+        self.db.commit()
+        return cur.rowcount > 0
 
     def has_scheduled_review_for(self, period_start: float) -> bool:
         """Manual reviews don't count: the Friday one still happens."""

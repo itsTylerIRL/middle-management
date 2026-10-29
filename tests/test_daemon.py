@@ -1,6 +1,7 @@
 """Daemon + real AudioClient over a real WebSocket, with a fake audio engine."""
 
 import asyncio
+import contextlib
 from datetime import datetime
 
 import aiohttp
@@ -205,3 +206,35 @@ async def test_overdue_scheduled_review_runs_once(cfg):
         assert daemon.status()["next_review"]
     finally:
         loop.cancel()
+
+
+async def test_delete_and_reset_over_http(cfg):
+    cfg.llm.enabled = False
+    daemon = Daemon(cfg)
+    ev = {"overall": 80.0, "threshold": 58, "passed": True, "word_count": 40, "jargon_ratio": 0.3,
+          "evaluator": "rules", "scores": {}, "detected_jargon": ["synergy"]}
+    ids = [daemon.store.record(trigger="t", personality="p", question="q", transcript="x", evaluation=ev,
+                               interrupted=False, level_before=0, level_after=0, feedback="f", pip_issued=False)
+           for _ in range(2)]
+    server = TestServer(daemon.make_app())
+    await server.start_server()
+    try:
+        async with aiohttp.ClientSession() as http:
+            async with http.delete(server.make_url(f"/api/history/{ids[0]}")) as r:
+                assert r.status == 200 and (await r.json())["ok"]
+            async with http.delete(server.make_url(f"/api/history/{ids[0]}")) as r:
+                assert r.status == 404
+            async with http.delete(server.make_url("/api/reviews/999")) as r:
+                assert r.status == 404
+            assert [e["type"] for e in daemon.events][-1] == "history_changed"
+            daemon.session_task = asyncio.create_task(asyncio.sleep(10))  # an interrogation in flight
+            async with http.post(server.make_url("/api/reset")) as r:
+                assert r.status == 409
+            daemon.session_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await daemon.session_task
+            async with http.post(server.make_url("/api/reset")) as r:
+                assert r.status == 200
+        assert daemon.store.stats()["total_interrogations"] == 0
+    finally:
+        await server.close()

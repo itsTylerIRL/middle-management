@@ -16,8 +16,9 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.events import Resize
+from textual.screen import ModalScreen
 from textual.timer import Timer
-from textual.widgets import DataTable, Footer, Header, RichLog, Static, TabbedContent, TabPane
+from textual.widgets import Button, DataTable, Footer, Header, Label, RichLog, Static, TabbedContent, TabPane
 
 from . import render
 from .config import Config
@@ -195,6 +196,40 @@ class ReflowLog(RichLog):
             self.scroll_end(animate=False, immediate=True, x_axis=False)
 
 
+class Confirm(ModalScreen[bool]):
+    """Yes/no dialog for destructive actions. Defaults to no."""
+
+    DEFAULT_CSS = """
+    Confirm { align: center middle; }
+    #dialog { width: 64; height: auto; border: thick $error; background: $surface; padding: 1 2; }
+    #question { width: 1fr; margin-bottom: 1; }
+    #buttons { width: 1fr; height: auto; align-horizontal: right; }
+    #buttons Button { margin-left: 2; }
+    """
+    BINDINGS = [Binding("y", "answer(True)", "Yes"), Binding("n,escape", "answer(False)", "No")]
+
+    def __init__(self, question: str, yes: str = "Delete") -> None:
+        super().__init__()
+        self.question = question
+        self.yes = yes
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(Text.from_markup(self.question), id="question")
+            with Horizontal(id="buttons"):
+                yield Button("Cancel [dim](n)[/]", id="no")
+                yield Button(f"{self.yes} [dim](y)[/]", id="yes", variant="error")
+
+    def on_mount(self) -> None:
+        self.query_one("#no", Button).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "yes")
+
+    def action_answer(self, yes: bool) -> None:
+        self.dismiss(yes)
+
+
 class ManagementConsole(App[None]):
     TITLE = "middlemanagementd"
     SUB_TITLE = "Corporate Alignment Enforcement Console"
@@ -224,6 +259,8 @@ class ManagementConsole(App[None]):
         Binding("r", "revive", "Revive"),
         Binding("h", "hush", "Hush"),
         Binding("s", "start", "Start daemon"),
+        Binding("d", "delete", "Delete"),
+        Binding("D", "reset", "Reset all", show=False),
         Binding("q", "quit", "Quit"),
         Binding("1", "tab('dashboard')", "Dashboard", show=False),
         Binding("2", "tab('history')", "History", show=False),
@@ -289,6 +326,12 @@ class ManagementConsole(App[None]):
         self.set_interval(2.0, self.refresh_status)
         self.set_interval(15.0, self.refresh_reputation)
         self.set_interval(30.0, self.refresh_llm)
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        # Under a confirm dialog only the safety keys stay live (and `d` can't stack a second dialog).
+        if isinstance(self.screen, Confirm):
+            return action in ("kill", "hush", "quit")
+        return True
 
     @property
     def manager(self) -> str | None:
@@ -357,6 +400,8 @@ class ManagementConsole(App[None]):
         if history:
             full.move_cursor(row=min(keep, len(history) - 1))
             self.show_interrogation(full.cursor_row)
+        else:
+            self.query_one("#detail", Static).update(Text.from_markup("[dim]No interrogations on file.[/]"))
 
     async def refresh_reviews(self) -> None:
         from .cli import ApiError
@@ -377,6 +422,8 @@ class ManagementConsole(App[None]):
         if reviews:
             table.move_cursor(row=min(keep, len(reviews) - 1))
             self.show_review(table.cursor_row)
+        else:
+            self.query_one("#review-doc", Static).update(Text.from_markup("[dim]No performance reviews on file.[/]"))
 
     def show_interrogation(self, row: int) -> None:
         if 0 <= row < len(self.history):
@@ -421,11 +468,12 @@ class ManagementConsole(App[None]):
             for e in events:
                 self.seq = max(self.seq, e["seq"])
                 self.show_event(e)
-            if events and any(e["type"] in ("session_finished", "rank_change", "killswitch", "conceded")
+            if events and any(e["type"] in ("session_finished", "rank_change", "killswitch", "conceded",
+                                                         "history_changed")
                               for e in events):
                 await self.refresh_reputation()
                 await self.refresh_status()
-            if any(e["type"] == "review_ready" for e in events):
+            if any(e["type"] in ("review_ready", "history_changed") for e in events):
                 await self.refresh_reviews()
         except ApiError:
             pass
@@ -452,11 +500,12 @@ class ManagementConsole(App[None]):
             feed.write(r)
 
     # --- actions -------------------------------------------------------------
-    async def _post(self, path: str, body: dict[str, Any] | None = None, *, quiet: bool = False) -> dict[str, Any] | None:
+    async def _post(self, path: str, body: dict[str, Any] | None = None, *, quiet: bool = False,
+                    method: str = "POST") -> dict[str, Any] | None:
         from .cli import ApiError
 
         try:
-            res = await self.call("POST", path, body)
+            res = await self.call(method, path, body)
         except ApiError as e:
             self.notify(str(e), severity="error")
             return None
@@ -471,6 +520,57 @@ class ManagementConsole(App[None]):
 
     async def action_review(self) -> None:
         await self._post("/api/review", {"personality": self.manager} if self.manager else {})
+
+    def _selected_record(self) -> tuple[str, dict[str, Any]] | None:
+        """The interrogation or review highlighted on the current tab."""
+        active = self.query_one("#tabs", TabbedContent).active
+        table_id, rows, kind = {"dashboard": ("#history", self.history, "interrogation"),
+                                "history-tab": ("#history-full", self.history, "interrogation"),
+                                "reviews-tab": ("#reviews", self.reviews, "review")}[active]
+        row = self.query_one(table_id, DataTable).cursor_row
+        return (kind, rows[row]) if 0 <= row < len(rows) else None
+
+    async def _after_edit(self, res: dict[str, Any] | None) -> None:
+        if res and res.get("ok"):
+            await self.refresh_reputation()
+            await self.refresh_reviews()
+
+    def action_delete(self) -> None:
+        if (selected := self._selected_record()) is None:
+            self.notify("Nothing selected to delete.")
+            return
+        kind, r = selected
+        when = datetime.fromtimestamp(r["ts"]).strftime("%a %d %b %H:%M")
+        if kind == "interrogation":
+            what = (f"the interrogation from [bold]{when}[/] "
+                    f"({render.manager_title(r['personality'])}, {r['overall']:.0f}, "
+                    f"{'PASS' if r['passed'] else 'FAIL'})")
+            path = f"/api/history/{r['id']}"
+        else:
+            what = f"the performance review filed [bold]{when}[/] ({r['rating_name']})"
+            path = f"/api/reviews/{r['id']}"
+
+        async def done(yes: bool | None) -> None:
+            if yes:
+                await self._after_edit(await self._post(path, method="DELETE"))
+
+        self.push_screen(Confirm(f"Delete {what}?\n\n[dim]Points, streaks and buzzword counts are recalculated. "
+                                 "This can't be undone.[/]"), done)
+
+    def action_reset(self) -> None:
+        async def done(yes: bool | None) -> None:
+            if not yes:
+                return
+            res = await self._post("/api/reset")
+            if res and res.get("ok"):
+                self.query_one("#review", Static).update(
+                    Text.from_markup("[dim]No evaluations yet. Press [bold]t[/] to be interrogated.[/]"))
+                self.query_one("#review", Static).border_title = "Last Evaluation"
+            await self._after_edit(res)
+
+        self.push_screen(Confirm("[bold red]Reset everything?[/]\n\nEvery interrogation, review and PIP is "
+                                 "deleted, and your rank, streaks and escalation level start over. "
+                                 "This can't be undone.", yes="Reset"), done)
 
     async def action_cycle_manager(self) -> None:
         self.manager_idx = (self.manager_idx + 1) % len(MANAGERS)

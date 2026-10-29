@@ -21,6 +21,7 @@ import random
 import signal
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -372,9 +373,12 @@ class Daemon:
         r.add_post("/api/shutdown", self.h_shutdown)
         r.add_get("/api/stats", self.h_stats)
         r.add_get("/api/history", self.h_history)
+        r.add_delete("/api/history/{id:\\d+}", self.h_history_delete)
+        r.add_post("/api/reset", self.h_reset)
         r.add_get("/api/events", self.h_events)
         r.add_get("/api/reviews", self.h_reviews)
         r.add_get("/api/reviews/{id:\\d+}", self.h_review_get)
+        r.add_delete("/api/reviews/{id:\\d+}", self.h_review_delete)
         r.add_post("/api/review", self.h_review)
         r.add_get("/api/config", self.h_config)
         r.add_get("/ws/audio", self.h_ws_audio)
@@ -418,6 +422,31 @@ class Daemon:
     async def h_history(self, request: web.Request) -> web.Response:
         limit = max(1, min(200, int(request.query.get("limit", "20"))))
         return web.json_response(self.store.history(limit))
+
+    def _edit_history(self, what: str, change: Callable[[], bool]) -> web.Response:
+        # A session in flight reads and writes the same state; let it finish first.
+        if self.busy:
+            return web.json_response({"ok": False, "message": "an evaluation is in progress; try again after it"},
+                                     status=409)
+        if not change():
+            return web.json_response({"error": f"no such {what}"}, status=404)
+        event(log, "history edited", what=what)
+        self._emit("history_changed", {"what": what})
+        return web.json_response({"ok": True, "message": f"{what} deleted"})
+
+    async def h_history_delete(self, request: web.Request) -> web.Response:
+        return self._edit_history("interrogation",
+                                  lambda: self.store.delete_interrogation(int(request.match_info["id"])))
+
+    async def h_review_delete(self, request: web.Request) -> web.Response:
+        return self._edit_history("review", lambda: self.store.delete_review(int(request.match_info["id"])))
+
+    async def h_reset(self, request: web.Request) -> web.Response:
+        def wipe() -> bool:
+            self.store.reset()
+            return True
+
+        return self._edit_history("all history", wipe)
 
     async def h_reviews(self, request: web.Request) -> web.Response:
         limit = max(1, min(200, int(request.query.get("limit", "20"))))

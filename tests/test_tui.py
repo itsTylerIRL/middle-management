@@ -69,6 +69,8 @@ class FakeDaemon:
         self.calls.append((method, path, body))
         if not self.online:
             raise ApiError("daemon not reachable at http://127.0.0.1:8742")
+        if method == "DELETE":
+            return {"ok": True, "message": "interrogation deleted"}
         if path.startswith("/api/status"):
             return self.status
         if path == "/api/stats":
@@ -235,6 +237,24 @@ async def test_reviews_tab_and_request():
         assert "Needs Synergy Improvement" in doc and "Align the alignment." in doc and "★★☆☆☆" in doc
         assert "Unaligned Individual Contributor → Associate Synergy Coordinator" in doc
         save_screenshot(app, "reviews")
+
+
+async def test_delete_asks_first_and_blocks_other_keys():
+    from middlemanagementd.tui import Confirm
+
+    api = FakeDaemon()
+    app = ManagementConsole(api, poll_seconds=60)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await settle(pilot, app)
+        await pilot.press("2", "d")
+        assert isinstance(app.screen, Confirm)
+        await pilot.press("t", "n")  # `t` is ignored under the dialog; `n` cancels
+        await pilot.pause()
+        assert not isinstance(app.screen, Confirm)
+        assert not any(m == "DELETE" for m, _, _ in api.calls) and ("/api/trigger", {}) not in api.posts()
+        await pilot.press("d", "y")
+        await pilot.pause()
+        assert ("DELETE", "/api/history/2", None) in api.calls
 
 
 async def test_feed_reflows_on_resize():

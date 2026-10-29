@@ -72,7 +72,9 @@ waits for any interrogation in progress and runs `ReviewWriter.run` in the same 
 and `hush` cancel a review exactly like an interrogation. The audio port is passed only when delivery is allowed;
 otherwise the review is written and filed silently. A week counts as done once a *scheduled* review is stored.
 Manual reviews (`POST /api/review`) don't count. Events: `review_started`, `review_ready`. API:
-`GET /api/reviews`, `GET /api/reviews/{id}`, `POST /api/review {personality?, aloud?, previous?}`.
+`GET /api/reviews`, `GET /api/reviews/{id}`, `DELETE /api/reviews/{id}`, `POST /api/review {personality?, aloud?, previous?}`.
+Records can be removed with `DELETE /api/history/{id}` or wiped with `POST /api/reset` (409 while a session runs);
+the store rebuilds streaks, buzzword counts and escalation, and emits `history_changed`.
 
 ## Silencing (the daemon must never become impossible to silence)
 

@@ -100,6 +100,8 @@ def event(e: dict[str, Any], *, include_evaluation: bool = True) -> RenderableTy
         return Text.from_markup(f"[dim]Scheduler {t}.[/]")
     if t == "skipped":
         return Text.from_markup(f"[dim]Scheduled interrogation skipped: {d['reason']}[/]")
+    if t == "history_changed":
+        return Text.from_markup(f"[dim]Records edited: {d['what']} deleted.[/]")
     if t == "audio_client":
         state = "connected" if d["connected"] else "[red]disconnected[/]"
         return Text.from_markup(f"[dim]Audio client {d['name']} {state}.[/]")

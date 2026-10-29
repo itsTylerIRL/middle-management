@@ -61,8 +61,9 @@ answers (`--speak` to hear the manager anyway). `middlemanagementd evaluate "you
 | **`hush`** | Silence the local audio client *immediately* (works even if the daemon is unreachable), then `kill` |
 | **`tui`** | **Full-screen management console** (see below) |
 | `status` | State, audio client, next interrogation, escalation level, rank, LLM health |
-| `stats` / `history` | Corporate reputation and recent interrogations |
-| `review [--now [--last-week] [--silent] [-p P]] [--list] [--id N]` | Weekly performance review: show the latest, list them, or hold one now |
+| `stats` / `history [--delete ID...]` | Corporate reputation and recent interrogations; delete mistakes by `#` |
+| `review [--now [--last-week] [--silent] [-p P]] [--list] [--id N] [--delete N]` | Weekly performance review: show the latest, list them, hold one now, or delete one |
+| `reset [--yes]` | Delete all interrogations, reviews and PIPs and start over (pause/kill switch state is kept) |
 | `config [--init]` | Show the effective config / write a starter config |
 | `test-audio [--only chime hold tts mic barge]` | Device check on this machine; `barge` tunes talk-over detection |
 | `evaluate TEXT [--no-llm] [--json]` | Grade text without audio |
@@ -91,7 +92,7 @@ Three tabs:
    * **Last evaluation**: per-metric score bars and verdict
    * **History**: press Enter on a row to open it in the History tab
 2. **History**: the last 100 interrogations. The highlighted one is shown in full: question, your answer, every
-   score, and what the manager said back.
+   score, and what the manager said back. `d` deletes the highlighted record.
 3. **Reviews**: your weekly performance reviews, each as a full HR document with the data it was calibrated on.
 
 | History | Reviews |
@@ -109,6 +110,8 @@ Three tabs:
 | `r` | Revive |
 | `h` | Hush: silence the local audio client instantly, plus kill switch |
 | `s` | Start the daemon + local audio client (when offline) |
+| `d` | Delete the highlighted interrogation or review (asks first) |
+| `D` | Reset all history (asks first) |
 | `q` | Quit (the daemon keeps running) |
 
 ## Split deployment: daemon on a server, audio at your desk

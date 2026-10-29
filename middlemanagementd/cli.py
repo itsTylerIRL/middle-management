@@ -255,20 +255,46 @@ def cmd_stats(cfg: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def _delete(cfg: Config, path: str) -> bool:
+    res = api(cfg, "DELETE", path)
+    ok = bool(res.get("ok"))
+    console.print(f"[green]{res['message'].capitalize()}.[/]" if ok else f"[red]{res.get('message')}[/]")
+    return ok
+
+
 def cmd_history(cfg: Config, args: argparse.Namespace) -> int:
+    if args.delete:
+        return 0 if all([_delete(cfg, f"/api/history/{i}") for i in args.delete]) else 1
     rows = api(cfg, "GET", f"/api/history?limit={args.limit}")
     t = Table(title="Interrogation History", title_style="bold magenta")
-    for col in ("When", "Manager", "Score", "Result", "Level", "Transcript"):
+    for col in ("#", "When", "Manager", "Score", "Result", "Level", "Transcript"):
         t.add_column(col)
     for r in rows:
-        t.add_row(datetime.fromtimestamp(r["ts"]).strftime("%m-%d %H:%M"), r["personality"], f"{r['overall']:.0f}",
+        t.add_row(str(r["id"]), datetime.fromtimestamp(r["ts"]).strftime("%m-%d %H:%M"), r["personality"], f"{r['overall']:.0f}",
                   "[green]PASS[/]" if r["passed"] else "[red]FAIL[/]", f"{r['level_before']}→{r['level_after']}",
                   (r["transcript"] or "")[:60])
     console.print(t)
     return 0
 
 
+def cmd_reset(cfg: Config, args: argparse.Namespace) -> int:
+    if not args.yes:
+        console.print("[bold red]This permanently deletes every interrogation, review and PIP,[/] and resets your "
+                      "rank, streaks and escalation level.")
+        if input("Type 'reset' to confirm: ").strip().lower() != "reset":
+            console.print("[dim]Nothing deleted.[/]")
+            return 1
+    res = api(cfg, "POST", "/api/reset")
+    if not res.get("ok"):
+        console.print(f"[red]{res.get('message')}[/]")
+        return 1
+    console.print("[green]History wiped.[/] You are once again an Unaligned Individual Contributor.")
+    return 0
+
+
 def cmd_review(cfg: Config, args: argparse.Namespace) -> int:
+    if args.delete is not None:
+        return 0 if _delete(cfg, f"/api/reviews/{args.delete}") else 1
     if args.now:
         body: dict[str, Any] = {"aloud": not args.silent, "previous": args.last_week}
         if args.personality:
@@ -558,6 +584,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_stats)
     s = sub.add_parser("history", help="recent interrogations")
     s.add_argument("--limit", "-n", type=int, default=15)
+    s.add_argument("--delete", type=int, nargs="+", metavar="ID", help="delete interrogations by # (see the list)")
     s.set_defaults(func=cmd_history)
     s = sub.add_parser("review", help="weekly performance review: show the latest, list them, or request one")
     s.add_argument("--now", action="store_true", help="hold a review now (this week so far)")
@@ -566,8 +593,17 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--personality", "-p")
     s.add_argument("--list", action="store_true", help="list past reviews")
     s.add_argument("--id", type=int, help="show one review")
+    s.add_argument("--delete", type=int, metavar="ID", help="delete a review by # (see --list)")
     s.add_argument("--limit", "-n", type=int, default=15)
     s.set_defaults(func=cmd_review)
+    s = sub.add_parser("reset", help="delete all history, reviews and PIPs and start over")
+    s.add_argument("--yes", "-y", action="store_true", help="don't ask for confirmation")
+    s.set_defaults(func=cmd_reset)
+    s = sub.add_parser("update", help="pull the latest version from git, reinstall if needed, and restart")
+    s.add_argument("--check", action="store_true", help="only show what's new")
+    s.add_argument("--no-restart", action="store_true", help="don't restart the daemon or audio client")
+    s.add_argument("--reinstall", action="store_true", help="reinstall dependencies even if they didn't change")
+    s.set_defaults(func=cmd_update)
     s = sub.add_parser("config", help="show effective config")
     s.add_argument("--init", action="store_true", help="write ~/.config/middlemanagementd/config.yaml")
     s.set_defaults(func=cmd_config)
