@@ -63,6 +63,7 @@ answers (`--speak` to hear the manager anyway). `middlemanagementd evaluate "you
 | `status` | State, audio client, next interrogation, escalation level, rank, LLM health |
 | `stats` / `history [--delete ID...]` | Corporate reputation and recent interrogations; delete mistakes by `#` |
 | `review [--now [--last-week] [--silent] [-p P]] [--list] [--id N] [--delete N]` | Weekly performance review: show the latest, list them, hold one now, or delete one |
+| `word` | Today's word of the day, its definition, and whether you've earned it |
 | `reset [--yes]` | Delete all interrogations, reviews and PIPs and start over (pause/kill switch state is kept) |
 | `config [--init]` | Show the effective config / write a starter config |
 | `test-audio [--only chime hold tts mic barge]` | Device check on this machine; `barge` tunes talk-over detection |
@@ -84,15 +85,17 @@ Three tabs:
 1. **Dashboard**
    * **Status**: state, audio client, countdowns to the next interrogation and the next performance review,
      LLM health, selected manager
+   * **Word of the day**: today's term, its definition and an example, and whether you've earned it yet
    * **Escalation ladder**: levels 0–5 with your current level marked
    * **Corporate reputation**: rank, progress to the next title, a score trend sparkline (green pass, red fail),
      streaks, PIPs, times you talked over management
    * **Most leveraged buzzwords**
-   * **Live interrogation feed**: question, your transcribed answer, barge-ins, the manager's feedback, as they happen
+   * **Live interrogation feed**: question, your transcribed answer, barge-ins, the manager's feedback and the
+     coaching afterwards, as they happen
    * **Last evaluation**: per-metric score bars and verdict
    * **History**: press Enter on a row to open it in the History tab
 2. **History**: the last 100 interrogations. The highlighted one is shown in full: question, your answer, every
-   score, and what the manager said back. `d` deletes the highlighted record.
+   score, what the manager said back, and how a VP would have said it. `d` deletes the highlighted record.
 3. **Reviews**: your weekly performance reviews, each as a full HR document with the data it was calibrated on.
 
 | History | Reviews |
@@ -201,6 +204,21 @@ client connected, outside quiet hours, on an active weekday. Otherwise it is **f
 the TUI (`3`) or with `middlemanagementd review`. If the daemon was down at 16:55, the review happens when it
 comes back, as long as it's still the same week. `review --now` and `w` in the TUI hold an extra review whenever
 you like. These don't replace Friday's.
+
+## Practice: coaching and the word of the day
+
+After every interrogation you get **coaching**: your answer rewritten the way a polished executive would have said it,
+the three phrases doing the most work and why they land, and one habit to fix. Without an LLM you still get tips aimed
+at your two weakest metrics, with terms to try that you didn't use. Coaching shows in the live feed, after `trigger`
+and `rehearse`, and in each interrogation's details on the History tab.
+
+Each day there's a **word of the day**, picked from the dictionary with a bias toward terms you rarely use, with a
+satirical definition and example (from the LLM; a category hint otherwise). Work it into an answer for
+`practice.word_of_day_points` bonus synergy points, once a day. The manager notices, and the coaching rewrite uses it.
+It's in the console sidebar, `status`, and `middlemanagementd word`; `rehearse` lets you practise today's word
+without it counting.
+
+Turn either off under `practice:` in the config.
 
 ## Talking over the manager
 

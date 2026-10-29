@@ -39,6 +39,7 @@ For a single machine, `middlemanagementd serve --local-audio` runs the same engi
 | `evaluator.py` | LLM scoring blended with rules (`llm_weight`); falls back to rules alone |
 | `prompts.py` | Evaluator and character prompts (see `docs/evaluation-prompts.md`) |
 | `escalation.py` | Levels 0–5, interruption policy, PIP rules, fallback lines |
+| `practice.py` | Coaching after each interrogation (LLM rewrite, or rules-based tips) and the word of the day |
 | `review.py` | Weekly performance review: period summary, code-decided rating, LLM/template write-up, delivery |
 | `reputation.py` | SQLite: history, buzzword counts, PIPs, reviews, persisted state (level, pause, kill switch), ranks; adds new columns to old databases |
 | `llm.py` | OpenAI-compatible client: timeouts, retries with backoff, SSE streaming, sentence splitter |
@@ -63,7 +64,8 @@ For a single machine, `middlemanagementd serve --local-audio` runs the same engi
 6. Character feedback is **streamed**: the LLM response is split into sentences and each one is spoken as
    soon as it is complete, while later ones are still generating. The level-4 meltdown is capped at
    `monologue_max_seconds`.
-7. The result is persisted, and a rank change is announced.
+7. The result is persisted (with the word-of-the-day bonus, if earned), and a rank change is announced.
+8. Coaching is generated and stored with the row; `session_finished` is emitted after it, so clients refresh once.
 
 ## Weekly review flow
 

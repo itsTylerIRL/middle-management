@@ -37,6 +37,7 @@ from .evaluator import JargonEvaluator
 from .llm import LLMClient
 from .logs import event
 from .personalities import PERSONALITIES
+from .practice import define_word, word_of_day
 from .reputation import Store, rank_for
 from .review import ReviewWriter, next_due, period, week_start
 from .scheduler import Scheduler
@@ -156,6 +157,8 @@ class Daemon:
         self.evaluator = JargonEvaluator(cfg.evaluation, self.llm, cfg.llm.max_tokens_eval, cfg.llm.eval_temperature)
         self.runner = InterrogationRunner(cfg, self.store, self.llm, self.evaluator, self.rng, emit=self._emit)
         self.reviewer = ReviewWriter(cfg, self.store, self.llm, self.rng, emit=self._emit)
+        self._defining: asyncio.Task[None] | None = None
+        self._define_retry_at = 0.0
         self.scheduler = Scheduler(cfg.scheduler, self.rng)
         self.hub = AudioHub()
         self.local_audio = audio
@@ -213,7 +216,17 @@ class Daemon:
             "rank": rank,
             "llm_endpoint": self.cfg.llm.base_url if self.cfg.llm.enabled else None,
             "last_event_seq": self.events[-1]["seq"] if self.events else 0,
+            "word_of_day": (word_of_day(self.store, self.evaluator.dictionary)
+                            if self.cfg.practice.word_of_day else None),
         }
+
+    def _define_word_of_day(self, word: dict[str, Any] | None) -> None:
+        """Fetch today's definition in the background; retried every few minutes while the LLM is down."""
+        if (word is None or word["definition"] or not self.llm.enabled or time.monotonic() < self._define_retry_at
+                or (self._defining is not None and not self._defining.done())):
+            return
+        self._define_retry_at = time.monotonic() + 300
+        self._defining = asyncio.create_task(define_word(self.store, self.llm, self.cfg.llm.max_tokens_word))
 
     # --- control -----------------------------------------------------------
     def trigger(self, trigger: str = "manual", personality: str | None = None) -> tuple[bool, str]:
@@ -386,6 +399,7 @@ class Daemon:
 
     async def h_status(self, request: web.Request) -> web.Response:
         data = self.status()
+        self._define_word_of_day(data["word_of_day"])
         if request.query.get("check"):
             data["llm_health"] = await self.llm.health()
         return web.json_response(data)
@@ -539,5 +553,9 @@ class Daemon:
             with contextlib.suppress(asyncio.CancelledError):
                 await reviews
             await runner.cleanup()
+            if self._defining is not None:
+                self._defining.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._defining
             await self.llm.close()
             self.store.close()

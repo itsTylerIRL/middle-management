@@ -39,6 +39,8 @@ class LLMConfig:
     max_tokens_monologue: int = 380
     max_tokens_pip: int = 220
     max_tokens_review: int = 520
+    max_tokens_coaching: int = 320
+    max_tokens_word: int = 120
     # Qwen3-style templates: skip <think> blocks, which are slow and unspoken.
     disable_thinking: bool = True
     json_mode: bool = True
@@ -199,6 +201,15 @@ class ReviewConfig:
 
 
 @dataclass
+class PracticeConfig:
+    # After each interrogation: your answer rewritten as an executive would say it, and why it works.
+    coaching: bool = True
+    # One term a day, favouring ones you rarely use. Working it into an answer earns bonus points, once a day.
+    word_of_day: bool = True
+    word_of_day_points: float = 5.0
+
+
+@dataclass
 class StorageConfig:
     database_path: str = "~/.local/share/middlemanagementd/middlemanagementd.db"
     store_transcripts: bool = True
@@ -227,6 +238,7 @@ class Config:
     escalation: EscalationConfig = field(default_factory=EscalationConfig)
     personality: PersonalityConfig = field(default_factory=PersonalityConfig)
     review: ReviewConfig = field(default_factory=ReviewConfig)
+    practice: PracticeConfig = field(default_factory=PracticeConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     source_path: str | None = None

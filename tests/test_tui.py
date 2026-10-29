@@ -239,6 +239,21 @@ async def test_reviews_tab_and_request():
         save_screenshot(app, "reviews")
 
 
+async def test_word_of_the_day_panel():
+    api = FakeDaemon()
+    app = ManagementConsole(api, poll_seconds=60)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await settle(pilot, app)
+        assert not app.query_one("#word").display  # an older daemon sends no word of the day
+        api.status["word_of_day"] = {"date": "2026-10-29", "term": "force multiplier", "category": "buzzwords",
+                                     "hint": "A buzzword.", "definition": "Takes credit at scale.",
+                                     "example": "", "claimed_by": 2}
+        await app.refresh_status()
+        await pilot.pause()
+        word = text_of(app, "#word")
+        assert app.query_one("#word").display and "force multiplier" in word and "earned today" in word
+
+
 async def test_delete_asks_first_and_blocks_other_keys():
     from middlemanagementd.tui import Confirm
 

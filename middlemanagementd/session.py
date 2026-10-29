@@ -20,6 +20,7 @@ from .evaluator import Evaluation, JargonEvaluator
 from .llm import LLMClient, LLMError, sentences
 from .logs import event
 from .personalities import Personality, pick_personality
+from .practice import coach, word_of_day, word_used
 from .prompts import character_messages
 from .reputation import Store, rank_for
 from .scoring import score_text, terms_used, weighted_overall
@@ -66,6 +67,9 @@ class SessionOutcome:
     record_id: int
     duration_seconds: float
     barge_ins: int = 0
+    word_of_day: str | None = None
+    word_bonus: float = 0.0
+    coaching: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -87,6 +91,7 @@ class InterrogationRunner:
         persona = pick_personality(personality or self.cfg.personality.default, self.cfg.personality.enabled, self.rng)
         level_before = self.store.level
         pip = self.store.open_pip()
+        word = word_of_day(self.store, self.evaluator.dictionary) if self.cfg.practice.word_of_day else None
         _, rank_before = rank_for(self.store.points())
         self.emit("session_started", {"trigger": trigger, "personality": persona.title, "level": level_before})
         event(log, "interrogation started", trigger=trigger, personality=persona.key, level=level_before)
@@ -130,11 +135,13 @@ class InterrogationRunner:
         self.emit("evaluation", evaluation.to_dict())
 
         stage, level_after, pip_info, pip_issued = self._decide(evaluation, transcript, level_before, pip)
+        earned_word = word_used(word, transcript)
         fb = _Feedback(talk_over=level_after >= self.cfg.escalation.talk_over_level)
         await self._speak_character(
             audio, persona, stage, fb, question=question, transcript=transcript, evaluation=evaluation,
             interrupted=result.interrupted, pip_terms=(pip_info or {}).get("terms"),
-            pip_used=len((pip_info or {}).get("used", [])),
+            pip_used=len((pip_info or {}).get("used", [])), word=word["term"] if word else None,
+            used_word=earned_word,
         )
         feedback = " ".join(fb.spoken)
         barge_ins += fb.barge_ins
@@ -146,12 +153,18 @@ class InterrogationRunner:
             self.store.set("barge_ins", int(self.store.get("barge_ins", 0)) + barge_ins)
         self.emit("feedback", {"stage": stage, "level": level_after, "text": feedback})
 
+        bonus = self.cfg.practice.word_of_day_points if earned_word else 0.0
         record_id = self.store.record(
             trigger=trigger, personality=persona.key, question=question,
             transcript=transcript if self.cfg.storage.store_transcripts else None,
             evaluation=evaluation.to_dict(), interrupted=result.interrupted, level_before=level_before,
-            level_after=level_after, feedback=feedback, pip_issued=pip_issued, barge_ins=barge_ins,
+            level_after=level_after, feedback=feedback, pip_issued=pip_issued, barge_ins=barge_ins, bonus=bonus,
         )
+        if word and earned_word:
+            self.store.set("word_of_day", {**word, "claimed_by": record_id})
+            self.emit("word_of_day", {"term": word["term"], "points": bonus})
+            await audio.say(f"I also noticed you worked in today's word, {word['term']}. That has been noted in "
+                            f"your file.", length_scale=persona.length_scale)
         _, rank_after = rank_for(self.store.points())
         if rank_after != rank_before:
             verb = "promoted" if evaluation.passed else "reassigned"
@@ -159,11 +172,22 @@ class InterrogationRunner:
                             length_scale=persona.length_scale)
             self.emit("rank_change", {"from": rank_before, "to": rank_after})
 
+        coaching = None
+        if self.cfg.practice.coaching:
+            # Talking is over; the coaching is for reading, so no hold music.
+            coaching = await coach(self.llm, self.cfg.llm.max_tokens_coaching, question=question,
+                                   transcript=transcript, evaluation=evaluation.to_dict(),
+                                   dictionary=self.evaluator.dictionary, rng=self.rng,
+                                   word=word["term"] if word else None)
+            self.store.set_coaching(record_id, coaching)
+            self.emit("coaching", coaching)
+
         outcome = SessionOutcome(
             personality=persona.title, question=question, transcript=transcript, interrupted=result.interrupted,
             evaluation=evaluation.to_dict(), level_before=level_before, level_after=level_after, stage=str(stage),
             feedback=feedback, pip=pip_info, rank_before=rank_before, rank_after=rank_after, record_id=record_id,
             duration_seconds=round(time.monotonic() - started, 1), barge_ins=barge_ins,
+            word_of_day=word["term"] if word else None, word_bonus=bonus, coaching=coaching,
         )
         event(log, "interrogation finished", passed=evaluation.passed, overall=evaluation.overall,
               evaluator=evaluation.evaluator, level=level_after, stage=str(stage))
@@ -252,7 +276,8 @@ class InterrogationRunner:
 
     async def _speak_character(self, audio: AudioPort, persona: Personality, stage: str | int, fb: _Feedback, *,
                                question: str, transcript: str, evaluation: Evaluation, interrupted: bool,
-                               pip_terms: list[str] | None, pip_used: int) -> None:
+                               pip_terms: list[str] | None, pip_used: int, word: str | None = None,
+                               used_word: bool = False) -> None:
         meltdown = self.escalation.is_monologue(stage)
         length_scale = persona.length_scale * (0.85 if meltdown else 1.0)
 
@@ -263,7 +288,7 @@ class InterrogationRunner:
             messages = character_messages(
                 persona, stage, question=question, transcript=transcript, critique=evaluation.critique,
                 detected=evaluation.detected_jargon, overall=evaluation.overall, pip_terms=pip_terms,
-                pip_used=pip_used, interrupted=interrupted,
+                pip_used=pip_used, interrupted=interrupted, word_of_day=word, used_word_of_day=used_word,
             )
             deadline = time.monotonic() + (self.cfg.escalation.monologue_max_seconds if meltdown
                                            else self.cfg.audio.max_utterance_seconds)

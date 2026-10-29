@@ -23,6 +23,8 @@ llm:
   max_tokens_monologue: 380       # level 4 meltdown
   max_tokens_pip: 220
   max_tokens_review: 520          # weekly performance review
+  max_tokens_coaching: 320        # "how a VP would have said it"
+  max_tokens_word: 120            # word of the day definition
   disable_thinking: true          # Qwen3-style <think> off; it's slow and nobody hears it
   json_mode: true
 
@@ -124,6 +126,11 @@ review:                           # weekly performance review
   time: "16:55"                   # the traditional moment for bad news
   personality: disappointed_vp    # or random
   deliver_aloud: true             # false = file it silently (read it in the TUI or `middlemanagementd review`)
+
+practice:                         # learning aids
+  coaching: true                  # after each interrogation: your answer rewritten by an executive, and why it works
+  word_of_day: true               # one term a day, picked from the ones you rarely use
+  word_of_day_points: 5           # bonus for working it into an answer (once a day)
 
 storage:
   database_path: ~/.local/share/middlemanagementd/middlemanagementd.db

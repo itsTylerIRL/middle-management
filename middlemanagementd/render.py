@@ -100,6 +100,11 @@ def event(e: dict[str, Any], *, include_evaluation: bool = True) -> RenderableTy
         return Text.from_markup(f"[dim]Scheduler {t}.[/]")
     if t == "skipped":
         return Text.from_markup(f"[dim]Scheduled interrogation skipped: {d['reason']}[/]")
+    if t == "word_of_day":
+        return Text.assemble(("Word of the day! ", "bold green"), f"You worked in “{d['term']}”. ",
+                             (f"+{d['points']:g} synergy points.", "green"))
+    if t == "coaching":
+        return coaching(d)
     if t == "history_changed":
         return Text.from_markup(f"[dim]Records edited: {d['what']} deleted.[/]")
     if t == "audio_client":
@@ -196,6 +201,39 @@ def review_facts(sm: dict[str, Any]) -> RenderableType:
     return t
 
 
+def coaching(c: dict[str, Any]) -> RenderableType:
+    """The post-interrogation coaching: an executive rewrite (LLM) and/or tips."""
+    parts: list[RenderableType] = []
+    if c.get("rewrite"):
+        parts.append(Text(c["rewrite"], style="italic"))
+        if c.get("rewrite_jargon_ratio") is not None:
+            parts.append(Text(f"{c['rewrite_jargon_ratio'] * 100:.0f}% jargon", style="dim"))
+    if c.get("highlights"):
+        parts.append(Text())
+        for h in c["highlights"]:
+            parts.append(Text.assemble(("• ", "green"), (f"“{h['phrase']}”", "bold green"),
+                                       (f"  {h['why']}" if h.get("why") else "", "")))
+    if c.get("tips"):
+        if parts:
+            parts.append(Text())
+        for tip in c["tips"]:
+            parts.append(Text.assemble(("Tip: ", "bold cyan"), tip))
+    title = "How a VP would have said it" if c.get("rewrite") else "Coaching"
+    return Panel(Group(*parts), title=title, border_style="green")
+
+
+def word_of_day(w: dict[str, Any] | None) -> RenderableType:
+    if not w:
+        return Text("Word of the day is off.", style="dim")
+    lines = [Text.assemble((w["term"], "bold green"), "  ",
+                           ("✓ earned today" if w.get("claimed_by") else "not used yet", "green" if w.get("claimed_by")
+                            else "dim"))]
+    lines.append(Text(w.get("definition") or w["hint"], style="" if w.get("definition") else "dim"))
+    if w.get("example"):
+        lines.append(Text(f"“{w['example']}”", style="italic dim"))
+    return Group(*lines)
+
+
 def interrogation(r: dict[str, Any]) -> RenderableType:
     """One stored interrogation in full."""
     head = Table.grid(padding=(0, 2))
@@ -220,4 +258,5 @@ def interrogation(r: dict[str, Any]) -> RenderableType:
         evaluation_summary(ev),
         Panel(Text(r.get("feedback") or ""), title="Manager feedback",
               border_style=level_style(r["level_after"])),
+        *([coaching(r["coaching"])] if r.get("coaching") else []),
     )

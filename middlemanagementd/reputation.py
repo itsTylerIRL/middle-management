@@ -45,7 +45,9 @@ CREATE TABLE IF NOT EXISTS interrogations (
     jargon_json TEXT NOT NULL,
     feedback TEXT,
     points REAL NOT NULL DEFAULT 0,
-    barge_ins INTEGER NOT NULL DEFAULT 0
+    barge_ins INTEGER NOT NULL DEFAULT 0,
+    pip_issued INTEGER NOT NULL DEFAULT 0,
+    coaching_json TEXT
 );
 CREATE TABLE IF NOT EXISTS buzzwords (
     term TEXT PRIMARY KEY,
@@ -78,9 +80,14 @@ CREATE TABLE IF NOT EXISTS reviews (
 );
 """
 
-# Columns added after the first release, applied to existing databases on open.
+# Columns added after the first release, applied to existing databases on open: (table, column, declaration,
+# backfill SQL run once when the column is added).
 MIGRATIONS = (
-    ("interrogations", "barge_ins", "INTEGER NOT NULL DEFAULT 0"),
+    ("interrogations", "barge_ins", "INTEGER NOT NULL DEFAULT 0", ""),
+    # Older rows have no bonus points, so a PIP shows up as the PIP penalty in their points.
+    ("interrogations", "pip_issued", "INTEGER NOT NULL DEFAULT 0",
+     f"UPDATE interrogations SET pip_issued = 1 WHERE points <= {FAIL_POINTS + PIP_POINTS}"),
+    ("interrogations", "coaching_json", "TEXT", ""),
 )
 
 
@@ -108,10 +115,12 @@ class Store:
         self.db = sqlite3.connect(self.path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
-        for table, column, decl in MIGRATIONS:
+        for table, column, decl, backfill in MIGRATIONS:
             cols = {r["name"] for r in self.db.execute(f"PRAGMA table_info({table})")}
             if column not in cols:
                 self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+                if backfill:
+                    self.db.execute(backfill)
         self.db.commit()
 
     def close(self) -> None:
@@ -153,19 +162,20 @@ class Store:
     # --- history ---------------------------------------------------------
     def record(self, *, trigger: str, personality: str, question: str, transcript: str | None,
                evaluation: dict[str, Any], interrupted: bool, level_before: int, level_after: int,
-               feedback: str, pip_issued: bool, barge_ins: int = 0) -> int:
+               feedback: str, pip_issued: bool, barge_ins: int = 0, bonus: float = 0.0) -> int:
         points = (evaluation["overall"] / PASS_POINTS_DIVISOR) if evaluation["passed"] else FAIL_POINTS
         if pip_issued:
             points += PIP_POINTS
+        points += bonus
         cur = self.db.execute(
             """INSERT INTO interrogations(ts, trigger, personality, question, transcript, word_count, jargon_ratio,
                overall, threshold, passed, evaluator, interrupted, level_before, level_after, scores_json,
-               jargon_json, feedback, points, barge_ins) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               jargon_json, feedback, points, barge_ins, pip_issued) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (time.time(), trigger, personality, question, transcript, evaluation["word_count"],
              evaluation["jargon_ratio"], evaluation["overall"], evaluation["threshold"], int(evaluation["passed"]),
              evaluation["evaluator"], int(interrupted), level_before, level_after,
              json.dumps(evaluation["scores"]), json.dumps(evaluation["detected_jargon"]), feedback, points,
-             barge_ins),
+             barge_ins, int(pip_issued)),
         )
         for term in set(evaluation["detected_jargon"]):
             self.db.execute("INSERT INTO buzzwords(term, count) VALUES(?, 1) "
@@ -177,12 +187,22 @@ class Store:
         self.db.commit()
         return int(cur.lastrowid or 0)
 
+    def set_coaching(self, interrogation_id: int, coaching: dict[str, Any]) -> None:
+        self.db.execute("UPDATE interrogations SET coaching_json = ? WHERE id = ?",
+                        (json.dumps(coaching), interrogation_id))
+        self.db.commit()
+
+    def buzzword_counts(self) -> dict[str, int]:
+        return {r["term"]: r["count"] for r in self.db.execute("SELECT term, count FROM buzzwords")}
+
     @staticmethod
     def _row(r: sqlite3.Row) -> dict[str, Any]:
         d = dict(r)
+        d["coaching"] = json.loads(d.pop("coaching_json") or "null")
         d["scores"] = json.loads(d.pop("scores_json"))
         d["detected_jargon"] = json.loads(d.pop("jargon_json"))
         d["passed"] = bool(d["passed"])
+        d["pip_issued"] = bool(d["pip_issued"])
         return d
 
     def history(self, limit: int = 20) -> list[dict[str, Any]]:
@@ -195,7 +215,11 @@ class Store:
         if row is None:
             return False
         newest = self.db.execute("SELECT MAX(id) FROM interrogations").fetchone()[0]
-        if row["points"] <= FAIL_POINTS + PIP_POINTS:
+        word = self.get("word_of_day")
+        if isinstance(word, dict) and word.get("claimed_by") == interrogation_id:
+            # Its bonus points go with the row; the word can be earned again today.
+            self.set("word_of_day", {**word, "claimed_by": None})
+        if row["pip_issued"]:
             # This failure issued a PIP (just before it was recorded); the PIP goes with it.
             self.db.execute("DELETE FROM pips WHERE id = (SELECT id FROM pips WHERE ts <= ? ORDER BY ts DESC LIMIT 1)",
                             (row["ts"],))
@@ -213,6 +237,8 @@ class Store:
             self.db.execute(f"DELETE FROM {table}")
         self.db.execute("DELETE FROM kv WHERE key IN ('streak', 'best_streak', 'barge_ins', 'escalation_level')")
         self.db.commit()
+        if isinstance(word := self.get("word_of_day"), dict):
+            self.set("word_of_day", {**word, "claimed_by": None})
 
     def _rebuild_derived(self) -> None:
         """Recompute buzzword counts and streaks from the interrogations that remain."""

@@ -242,6 +242,7 @@ class ManagementConsole(App[None]):
     .panel { border: round $primary-darken-1; padding: 0 1; height: auto; }
     .panel:focus-within { border: round $accent; }
     #status { border: round magenta; }
+    #word { border: round green; }
     #feed { height: 1fr; border: round cyan; }
     #review { height: auto; max-height: 16; border: round magenta; }
     #history { height: 12; border: round $primary-darken-1; }
@@ -289,6 +290,7 @@ class ManagementConsole(App[None]):
             with TabPane("Dashboard [dim]1[/]", id="dashboard"), Horizontal(id="dash"):
                 with Vertical(id="side"):
                     yield Static(id="status", classes="panel")
+                    yield Static(id="word", classes="panel")
                     yield Static(id="escalation", classes="panel")
                     yield Static(id="reputation", classes="panel")
                     yield Static(id="buzzwords", classes="panel")
@@ -310,7 +312,7 @@ class ManagementConsole(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
-        titles = {"status": "Status", "escalation": "Escalation", "reputation": "Corporate Reputation",
+        titles = {"status": "Status", "word": "Word of the Day", "escalation": "Escalation", "reputation": "Corporate Reputation",
                   "buzzwords": "Most Leveraged Buzzwords", "feed": "Live Interrogation",
                   "review": "Last Evaluation", "history": "History [dim](enter for details)[/]",
                   "history-full": "Interrogations", "detail-scroll": "Details",
@@ -366,8 +368,11 @@ class ManagementConsole(App[None]):
             self.status, self.offline_reason = None, str(e)
             self.sub_title = "daemon offline"
         self.query_one("#status", Static).update(status_renderable(self.status, self.offline_reason, self.manager))
+        word = self.query_one("#word", Static)
+        word.display = bool(self.status and self.status.get("word_of_day"))
         if self.status:
             self.query_one("#escalation", Static).update(escalation_renderable(self.status["escalation_level"]))
+            word.update(render.word_of_day(self.status.get("word_of_day")))
 
     async def refresh_reputation(self) -> None:
         from .cli import ApiError

@@ -54,6 +54,7 @@ def cfg(tmp_path: Any) -> Config:
     c.storage.database_path = str(tmp_path / "test.db")
     c.audio.hold_music = True
     c.personality.default = "passive_aggressive"
+    c.practice.word_of_day = False  # today's word is date-seeded; tests that want it opt in
     return c
 
 

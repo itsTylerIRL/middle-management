@@ -213,10 +213,20 @@ def cmd_status(cfg: Config, args: argparse.Namespace) -> int:
         t.add_row("Next performance review", rv.replace("T", " "))
     t.add_row("Escalation", f"level {s['escalation_level']}: {s['escalation_name']}")
     t.add_row("Rank", s["rank"])
+    if w := s.get("word_of_day"):
+        t.add_row("Word of the day", f"[bold green]{w['term']}[/]" + (" [green]✓[/]" if w.get("claimed_by") else ""))
     llm = s.get("llm_health", {})
     t.add_row("LLM", f"{s['llm_endpoint']} " + ("[green]up[/]" if llm.get("ok") else f"[red]down[/] {llm.get('error', '')}"))
     t.add_row("Uptime", f"{s['uptime_seconds'] // 3600}h {s['uptime_seconds'] % 3600 // 60}m")
     console.print(Panel(t, title=f"middlemanagementd {s['version']}", border_style="magenta"))
+    return 0
+
+
+def cmd_word(cfg: Config, args: argparse.Namespace) -> int:
+    w = api(cfg, "GET", "/api/status").get("word_of_day")
+    console.print(Panel(render.word_of_day(w), title="Word of the Day", border_style="green", expand=False))
+    if w and not w.get("claimed_by"):
+        console.print(f"[dim]Work it into an interrogation for +{cfg.practice.word_of_day_points:g} synergy points.[/]")
     return 0
 
 
@@ -477,6 +487,7 @@ def cmd_rehearse(cfg: Config, args: argparse.Namespace) -> int:
     from .config import expand
     from .evaluator import JargonEvaluator
     from .llm import LLMClient
+    from .practice import define_word, word_of_day
     from .reputation import Store
     from .session import InterrogationRunner
 
@@ -491,6 +502,12 @@ def cmd_rehearse(cfg: Config, args: argparse.Namespace) -> int:
         engine.load(stt=False)
         speaker = LocalAudioPort(engine)
     store = Store(expand(cfg.storage.database_path) if args.record else ":memory:")
+    if not args.record and expand(cfg.storage.database_path).exists():
+        # Practise the real word of the day (earning it here is only pretend).
+        real = Store(expand(cfg.storage.database_path))
+        if isinstance(w := real.get("word_of_day"), dict):
+            store.set("word_of_day", {**w, "claimed_by": None})
+        real.close()
     if args.level is not None:
         store.level = args.level
 
@@ -498,8 +515,13 @@ def cmd_rehearse(cfg: Config, args: argparse.Namespace) -> int:
         llm = LLMClient(cfg.llm)
         evaluator = JargonEvaluator(cfg.evaluation, llm, cfg.llm.max_tokens_eval, cfg.llm.eval_temperature)
         runner = InterrogationRunner(cfg, store, llm, evaluator, emit=lambda k, d: render_event(
-            {"type": k, "data": d}) if k in ("evaluation", "rank_change") else None)
+            {"type": k, "data": d}) if k in ("evaluation", "rank_change", "word_of_day", "coaching") else None)
         try:
+            if cfg.practice.word_of_day and (w := word_of_day(store, evaluator.dictionary)):
+                if not w["definition"] and llm.enabled:
+                    await define_word(store, llm, cfg.llm.max_tokens_word)
+                console.print(Panel(render.word_of_day(store.get("word_of_day")), title="Word of the Day",
+                                    border_style="green", expand=False))
             for _ in range(args.rounds):
                 out = await runner.run(ConsoleAudioPort(speaker, console.print), trigger="rehearsal",
                                        personality=args.personality)
@@ -575,6 +597,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("status", help="daemon status").set_defaults(func=cmd_status)
     sub.add_parser("tui", help="full-screen management console").set_defaults(func=cmd_tui)
+    sub.add_parser("word", help="today's word of the day").set_defaults(func=cmd_word)
     s = sub.add_parser("trigger", help="interrogate me now")
     s.add_argument("--personality", "-p")
     s.add_argument("--no-follow", action="store_true", help="don't stream the session to the terminal")
