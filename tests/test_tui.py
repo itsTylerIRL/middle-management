@@ -235,3 +235,15 @@ async def test_reviews_tab_and_request():
         assert "Needs Synergy Improvement" in doc and "Align the alignment." in doc and "★★☆☆☆" in doc
         assert "Unaligned Individual Contributor → Associate Synergy Coordinator" in doc
         save_screenshot(app, "reviews")
+
+
+async def test_feed_reflows_on_resize():
+    api = FakeDaemon()
+    app = ManagementConsole(api, poll_seconds=60)
+    async with app.run_test(size=(120, 50)) as pilot:
+        await settle(pilot, app)
+        feed = app.query_one("#feed", RichLog)
+        narrow = max(line.cell_length for line in feed.lines)
+        await pilot.resize_terminal(180, 50)
+        await pilot.pause(0.2)
+        assert max(line.cell_length for line in feed.lines) > narrow + 40

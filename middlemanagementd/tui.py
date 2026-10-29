@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import signal
+from collections import deque
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any
+from typing import Any, Self
 
 from rich.console import Group, RenderableType
 from rich.table import Table
@@ -14,6 +15,8 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.events import Resize
+from textual.timer import Timer
 from textual.widgets import DataTable, Footer, Header, RichLog, Static, TabbedContent, TabPane
 
 from . import render
@@ -146,6 +149,52 @@ def buzzwords_renderable(top: list[list[Any]]) -> RenderableType:
     return t
 
 
+class ReflowLog(RichLog):
+    """A RichLog that keeps what it was given and re-renders it when its width changes.
+
+    RichLog renders each write to fixed-width strips, so panels and rules stay frozen at the width the
+    window had when they arrived. Replaying the original renderables lets them track the terminal.
+    """
+
+    def __init__(self, *args: Any, backlog: int = 500, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._entries: deque[tuple[RenderableType | object, dict[str, Any]]] = deque(maxlen=backlog)
+        self._rendered_width = 0
+        self._reflow_timer: Timer | None = None
+
+    def write(self, content: RenderableType | object, **kwargs: Any) -> Self:  # type: ignore[override]
+        kwargs.setdefault("expand", True)
+        self._entries.append((content, kwargs))
+        return super().write(content, **kwargs)
+
+    def clear(self) -> Self:
+        self._entries.clear()
+        return super().clear()
+
+    def on_resize(self, event: Resize) -> None:
+        # RichLog's own handler flushes writes made before the size was known; that render counts.
+        first = not self._size_known
+        super().on_resize(event)
+        if first:
+            self._rendered_width = event.size.width
+        elif event.size.width != self._rendered_width:
+            # Debounce: dragging a window edge sends a burst of resizes.
+            if self._reflow_timer is not None:
+                self._reflow_timer.stop()
+            self._reflow_timer = self.set_timer(0.05, self._reflow)
+
+    def _reflow(self) -> None:
+        self._reflow_timer = None
+        self._rendered_width = self.size.width
+        at_end = self.is_vertical_scroll_end
+        entries = list(self._entries)
+        super().clear()
+        for content, kwargs in entries:
+            super().write(content, **{**kwargs, "scroll_end": False})
+        if at_end:
+            self.scroll_end(animate=False, immediate=True, x_axis=False)
+
+
 class ManagementConsole(App[None]):
     TITLE = "middlemanagementd"
     SUB_TITLE = "Corporate Alignment Enforcement Console"
@@ -207,7 +256,7 @@ class ManagementConsole(App[None]):
                     yield Static(id="reputation", classes="panel")
                     yield Static(id="buzzwords", classes="panel")
                 with Vertical(id="main"):
-                    yield RichLog(id="feed", wrap=True, markup=True, highlight=False, min_width=40)
+                    yield ReflowLog(id="feed", wrap=True, markup=True, highlight=False, min_width=40)
                     yield Static(Text.from_markup("[dim]No evaluations yet. Press [bold]t[/] to be interrogated.[/]"),
                                  id="review", classes="panel")
                     yield DataTable(id="history", cursor_type="row", zebra_stripes=True)
@@ -384,7 +433,7 @@ class ManagementConsole(App[None]):
             self._polling = False
 
     def show_event(self, e: dict[str, Any]) -> None:
-        feed = self.query_one("#feed", RichLog)
+        feed = self.query_one("#feed", ReflowLog)
         if e["type"] == "evaluation":
             review = self.query_one("#review", Static)
             review.update(Group(render.score_table(e["data"]["scores"], width=24), Text(),
