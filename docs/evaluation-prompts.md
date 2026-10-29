@@ -1,7 +1,7 @@
 # Evaluation prompts
 
 The templates live in `middlemanagementd/prompts.py`. Below are rendered examples and real responses
-from the llama.cpp server on pepper (Qwen3.8-27B, `enable_thinking: false`, JSON mode).
+from a llama.cpp server running Qwen3.8-27B (`enable_thinking: false`, JSON mode).
 
 ## 1. Grading
 

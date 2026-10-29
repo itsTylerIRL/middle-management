@@ -1,4 +1,4 @@
-# Audio client. Install as a *user* unit on the machine with the microphone/speakers (e.g. chef):
+# Audio client. Install as a *user* unit on the machine with the microphone/speakers:
 #   cp systemd/middlemanagementd-audio.service ~/.config/systemd/user/
 #   systemctl --user daemon-reload && systemctl --user enable --now middlemanagementd-audio
 # Silence instantly with: middlemanagementd hush   (or: systemctl --user stop middlemanagementd-audio)

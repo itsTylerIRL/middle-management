@@ -4,8 +4,12 @@
 
 llm:
   enabled: true
-  # Any OpenAI-compatible endpoint. Here: llama.cpp server on pepper.
-  base_url: http://pepper.local:8000/v1
+  # Any OpenAI-compatible endpoint:
+  #   llama.cpp llama-server  http://127.0.0.1:8080/v1   (default)
+  #   Ollama                  http://127.0.0.1:11434/v1  (set model: to the model name)
+  #   LM Studio               http://127.0.0.1:1234/v1
+  # Or another machine on your network, e.g. http://gpu-box.local:8080/v1
+  base_url: http://127.0.0.1:8080/v1
   model: local                    # llama.cpp ignores this; other servers may need a real name
   api_key_env: MMD_LLM_API_KEY    # env var holding a key, if the endpoint needs one
   connect_timeout_seconds: 5
@@ -23,7 +27,7 @@ llm:
   json_mode: true
 
 server:
-  host: 127.0.0.1                 # on deepdish: its tailnet IP, and set MMD_TOKEN
+  host: 127.0.0.1                 # split deployment: the server's LAN/VPN IP, and set MMD_TOKEN
   port: 8742
   url: http://127.0.0.1:8742      # where the CLI and audio client reach the daemon
   token_env: MMD_TOKEN            # shared bearer token, read from this env var

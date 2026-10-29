@@ -1,7 +1,7 @@
 # Architecture
 
 ```
-          deepdish (or anywhere)                                 chef (has mic + speakers)
+          server (or anywhere)                                   desk machine (mic + speakers)
  ┌─────────────────────────────────────────┐        ┌────────────────────────────────────────┐
  │ middlemanagementd serve                 │        │ middlemanagementd audio-client          │
  │                                         │  WS    │                                        │
@@ -14,15 +14,15 @@
  └──────────────────┼──────────────────────────┼───┘        └────────────────────────────────────────┘
                     │                          │ HTTP (OpenAI-compatible)
                     │                          ▼
-                    │                 pepper: llama.cpp server :8000 (Qwen3.8-27B)
+                    │                 LLM host: llama.cpp / Ollama / ... (OpenAI API)
 ```
 
 ## Why split the daemon from the audio?
 
-The daemon host (`deepdish`) has no microphone or speakers. Everything that touches sound lives in the
-**audio client** on the machine you sit at (`chef`). The daemon sends it high-level ops and gets text
+The daemon host need not have a microphone or speakers. Everything that touches sound lives in the
+**audio client** on the machine you sit at. The daemon sends it high-level ops and gets text
 back, so only text crosses the network: no audio streaming and no codec. STT and TTS run where the
-audio is, on chef's CPU (faster-whisper `small.en` int8 transcribes in about 1 s; Piper is faster than real time).
+audio is, on that machine's CPU (faster-whisper `small.en` int8 transcribes in about 1 s; Piper is faster than real time).
 
 For a single machine, `middlemanagementd serve --local-audio` runs the same engine in-process.
 
@@ -58,7 +58,7 @@ For a single machine, `middlemanagementd serve --local-audio` runs the same engi
    At escalation level ≥ 3 it also takes an `interrupt_after` limit: once you've talked that long, the client
    stops recording and the manager cuts in ("I'm going to stop you right there").
 4. A filler line ("Let me run that through our proprietary maturity framework"), then **hold music** while
-   the evaluator runs (the LLM on pepper generates about 7 tok/s, so grading takes 20–35 s).
+   the evaluator runs (with a 27B model at about 7 tok/s, grading takes 20–35 s).
 5. Escalation decides the stage: praise, levels 1–5, or PIP completed/failed.
 6. Character feedback is **streamed**: the LLM response is split into sentences and each one is spoken as
    soon as it is complete, while later ones are still generating. The level-4 meltdown is capped at

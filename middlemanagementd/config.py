@@ -23,7 +23,8 @@ DEFAULT_CONFIG_PATHS = (
 @dataclass
 class LLMConfig:
     enabled: bool = True
-    base_url: str = "http://pepper.local:8000/v1"
+    # Any OpenAI-compatible endpoint; this is llama.cpp's llama-server on its default port.
+    base_url: str = "http://127.0.0.1:8080/v1"
     model: str = "local"
     # Name of an env var holding an API key, if the endpoint needs one. Never put keys in YAML.
     api_key_env: str = "MMD_LLM_API_KEY"

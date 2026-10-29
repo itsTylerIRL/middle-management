@@ -1,4 +1,4 @@
-# Core daemon. Install as a *user* unit on the host that runs the service (e.g. deepdish):
+# Core daemon. Install as a *user* unit on the host that runs the service:
 #   cp systemd/middlemanagementd.service ~/.config/systemd/user/
 #   systemctl --user daemon-reload && systemctl --user enable --now middlemanagementd
 [Unit]

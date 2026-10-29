@@ -1,5 +1,6 @@
 """TUI behaviour against a fake daemon API, headless via Textual's pilot."""
 
+import os
 import time
 from typing import Any
 
@@ -11,9 +12,9 @@ from middlemanagementd.tui import ManagementConsole, escalation_renderable, repu
 STATUS = {
     "version": "0.1.0", "uptime_seconds": 3723, "paused": False, "killswitch": False, "busy": False,
     "scheduler_enabled": True, "next_interrogation": "2099-01-01T09:00:00",
-    "audio": {"name": "chef", "connected_at": time.time()}, "escalation_level": 2,
+    "audio": {"name": "desk", "connected_at": time.time()}, "escalation_level": 2,
     "escalation_name": "Alignment Concerns", "rank": "Associate Synergy Coordinator",
-    "llm_endpoint": "http://pepper.local:8000/v1", "last_event_seq": 3, "llm_health": {"ok": True},
+    "llm_endpoint": "http://127.0.0.1:8080/v1", "last_event_seq": 3, "llm_health": {"ok": True},
 }
 STATS = {
     "total_interrogations": 4, "successful_reports": 3, "failed_evaluations": 1, "average_jargon_density": 0.31,
@@ -97,6 +98,12 @@ def text_of(app: ManagementConsole, wid: str) -> str:
     return console.export_text()
 
 
+def save_screenshot(app: ManagementConsole, name: str) -> None:
+    """Set MMD_SCREENSHOT_DIR to save SVG screenshots (used for the README)."""
+    if directory := os.environ.get("MMD_SCREENSHOT_DIR"):
+        app.save_screenshot(f"{name}.svg", path=directory)
+
+
 async def settle(pilot, app) -> None:
     await app.refresh_all()
     await app.poll_events()
@@ -109,7 +116,7 @@ async def test_dashboard_populates_from_daemon():
     async with app.run_test(size=(160, 50)) as pilot:
         await settle(pilot, app)
         assert "enforcing synergy" in text_of(app, "#status")
-        assert "chef" in text_of(app, "#status")
+        assert "desk" in text_of(app, "#status")
         assert "Associate Synergy Coordinator" in text_of(app, "#reputation")
         assert "3×" in text_of(app, "#reputation")  # talked over management
         assert "synergy" in text_of(app, "#buzzwords")
@@ -117,7 +124,7 @@ async def test_dashboard_populates_from_daemon():
         assert app.query_one("#history", DataTable).row_count == 2
         assert "▇" in text_of(app, "#reputation") or "▆" in text_of(app, "#reputation")  # score trend
         assert len(app.query_one("#feed", RichLog).lines) > 0
-        app.save_screenshot("tui.svg", path=str(__import__("os").environ.get("MMD_SCREENSHOT_DIR", "/tmp")))
+        save_screenshot(app, "dashboard")
 
 
 async def test_keys_drive_the_daemon():
@@ -227,4 +234,4 @@ async def test_reviews_tab_and_request():
         doc = text_of(app, "#review-doc")
         assert "Needs Synergy Improvement" in doc and "Align the alignment." in doc and "★★☆☆☆" in doc
         assert "Unaligned Individual Contributor → Associate Synergy Coordinator" in doc
-        app.save_screenshot("tui-reviews.svg", path=str(__import__("os").environ.get("MMD_SCREENSHOT_DIR", "/tmp")))
+        save_screenshot(app, "reviews")

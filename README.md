@@ -7,17 +7,38 @@ the question. Fail, and an increasingly insufferable middle manager pushes back,
 melts down into a buzzword monologue, then puts you on a Performance Improvement Plan. Succeed, and you are
 praised for your executive leadership potential despite having said nothing.
 
-Everything runs locally: llama.cpp for judgement, faster-whisper for ears, Piper for a voice. No cloud, no
-paid APIs, and no recordings kept.
+Everything runs locally: a local LLM (llama.cpp, Ollama, anything OpenAI-compatible) for judgement,
+faster-whisper for ears, Piper for a voice. No cloud, no paid APIs, and no recordings kept.
+
+![The management console](docs/screenshots/dashboard.png)
+
+> [!IMPORTANT]
+> **This is a joke app that uses your microphone.** It listens only after the chime, for your answer, and
+> keeps audio in memory until it has been transcribed. It never saves audio unless you set `keep_recordings: true`.
+> It **does** store the text transcripts in a local SQLite database, unless `store_transcripts: false`, and the
+> microphone also picks up anyone else talking nearby. Think twice before running it in a shared office, and
+> make sure the people around you know. `middlemanagementd hush` silences it instantly, and `kill` keeps it quiet
+> until you `revive` it.
+
+## Requirements
+
+* **Linux** with PipeWire or PulseAudio (the audio client uses `paplay`/`parecord` from `pulseaudio-utils`).
+  The daemon itself runs anywhere Python does.
+* **Python 3.12+**
+* **An OpenAI-compatible LLM endpoint**: [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server`
+  (default `http://127.0.0.1:8080/v1`), Ollama, LM Studio and so on. Tested with a 27B model. Smaller models work
+  and are faster, but the manager gets less eloquent. With no LLM at all, it grades with rules and speaks fixed lines.
+* Optional: `ffmpeg` (for a custom hold music file) and `espeak-ng` (a fallback voice if you skip Piper).
 
 ## Quick start (single machine)
 
 ```bash
-git clone <this repo> ~/middle-management && cd ~/middle-management
+git clone https://github.com/itsTylerIRL/middle-management.git && cd middle-management
 python3 -m venv .venv
 .venv/bin/pip install -e '.[audio,dev]'
 .venv/bin/middlemanagementd download-models        # Piper voice (~120 MB) + Whisper small.en (~250 MB)
 .venv/bin/middlemanagementd config --init          # writes ~/.config/middlemanagementd/config.yaml
+#   edit llm.base_url if your LLM isn't llama-server on 127.0.0.1:8080
 .venv/bin/middlemanagementd test-audio             # chime, TTS, microphone + transcription
 
 .venv/bin/middlemanagementd start --with-audio     # daemon + local audio client, in the background
@@ -73,6 +94,10 @@ Three tabs:
    score, and what the manager said back.
 3. **Reviews**: your weekly performance reviews, each as a full HR document with the data it was calibrated on.
 
+| History | Reviews |
+|---|---|
+| ![History tab](docs/screenshots/history.png) | ![Reviews tab](docs/screenshots/reviews.png) |
+
 | Key | |
 |---|---|
 | `1` `2` `3` | Dashboard / History / Reviews |
@@ -86,29 +111,30 @@ Three tabs:
 | `s` | Start the daemon + local audio client (when offline) |
 | `q` | Quit (the daemon keeps running) |
 
-## Split deployment: daemon on deepdish, audio on chef
+## Split deployment: daemon on a server, audio at your desk
 
-The daemon needs no audio hardware or audio dependencies. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The daemon needs no audio hardware or audio dependencies, so it can live on a home server while the audio client
+runs on the computer you sit at. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-**On deepdish** (daemon):
+**On the server** (daemon):
 
 ```bash
-cd ~/middle-management && python3 -m venv .venv && .venv/bin/pip install -e .
+cd middle-management && python3 -m venv .venv && .venv/bin/pip install -e .
 mkdir -p ~/.config/middlemanagementd
 cp config.example.yaml ~/.config/middlemanagementd/config.yaml
-#   server.host: <deepdish tailnet IP or 0.0.0.0>
-#   llm.base_url: http://pepper.local:8000/v1   (or pepper's tailnet IP)
+#   server.host: <the server's LAN/VPN IP, or 0.0.0.0>
+#   llm.base_url: http://<your LLM host>:8080/v1
 echo "MMD_TOKEN=$(openssl rand -hex 24)" > ~/.config/middlemanagementd/env && chmod 600 ~/.config/middlemanagementd/env
 cp systemd/middlemanagementd.service ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now middlemanagementd
 loginctl enable-linger "$USER"    # keep user services running without a login session
 ```
 
-**On chef** (audio client):
+**On your desk machine** (audio client):
 
 ```bash
 .venv/bin/pip install -e '.[audio]' && .venv/bin/middlemanagementd download-models
-#   config: server.url: http://<deepdish>:8742
+#   config: server.url: http://<server>:8742
 #   ~/.config/middlemanagementd/env: the same MMD_TOKEN
 cp systemd/middlemanagementd-audio.service ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now middlemanagementd-audio
@@ -131,7 +157,7 @@ its hard cap, interval range and `frequency`, quiet hours and weekdays, `difficu
 Each answer gets eight 0–100 scores. A deterministic scorer (`scoring.py` + the
 [jargon dictionary](middlemanagementd/data/jargon.yaml)) always runs. When the LLM is reachable its scores
 are blended in (`llm_weight`, default 0.7). Code, not the LLM, computes the weighted overall and the
-pass/fail, using your weights, the personality's priorities and the difficulty threshold. If pepper is down,
+pass/fail, using your weights, the personality's priorities and the difficulty threshold. If the LLM is unreachable,
 grading continues on rules alone and the manager falls back to fixed lines. Prompts and real outputs are
 in [docs/evaluation-prompts.md](docs/evaluation-prompts.md).
 
@@ -165,7 +191,7 @@ your file".
 * **HR calibration (also code) fixes the rating**: ★ to ★★★★★, from *Does Not Meet Expectations* to
   *Transformational Thought Leader*, or *Insufficient Visibility* if you were never interrogated.
 * **The LLM only writes it up**: a headline, strengths, development areas, absurd objectives for next week, and a
-  closing remark. If pepper is down, an HR template does it instead.
+  closing remark. If the LLM is unreachable, an HR template does it instead.
 
 The review is read aloud only when an interrogation would be allowed then: not paused, no kill switch, audio
 client connected, outside quiet hours, on an active weekday. Otherwise it is **filed silently** to read later in
@@ -193,8 +219,8 @@ You count as talking over it when the mic is clearly louder than that prediction
 * **Speakers**: you must be clearly louder than the manager *at the microphone*. It helps to keep the speaker
   volume sane, use a mic close to you, and keep other audio off. Run `middlemanagementd test-audio --only barge`:
   it shows how close your voice gets to the threshold and suggests a `barge_in_ratio`.
-* `echo_cancel: pipewire` loads PipeWire's WebRTC echo canceller at runtime, nothing persisted. On chef's
-  HDMI output it was inconsistent in testing, so it's off by default; try it if your hardware cooperates.
+* `echo_cancel: pipewire` loads PipeWire's WebRTC echo canceller at runtime, nothing persisted. On the HDMI
+  output it was tested with it was inconsistent, so it's off by default; try it if your hardware cooperates.
 
 ## Hold music
 
@@ -214,10 +240,28 @@ top on every hold, as is traditional.
 * No root needed. The units are user services with `NoNewPrivileges`.
 * The API binds to localhost by default. Before binding elsewhere, set `MMD_TOKEN`.
 
+## License
+
+MIT, see [LICENSE](LICENSE).
+
+The optional `audio` extra installs third-party components under their own licences, and they are not
+bundled here:
+
+* [`piper-tts`](https://github.com/OHF-Voice/piper1-gpl) is **GPL-3.0-or-later**. middlemanagementd works without
+  it (`tts.backend: espeak` or `none`). If you redistribute a bundle that includes Piper, the GPL applies to
+  that bundle.
+* Piper **voice models** have their own licences. The default, `en_US-ryan-high`, is trained on RyanSpeech and is
+  licensed **CC BY-NC-SA 4.0** (non-commercial). Check the model card before choosing a voice for anything other
+  than personal use.
+* faster-whisper and the Whisper models are MIT.
+
+*Opus No. 1* is not included. Point `hold_music_file` at your own copy.
+
 ## Development
 
 ```bash
 .venv/bin/python -m pytest      # 89 tests; mock audio + fake LLM, no devices or network needed
+MMD_SCREENSHOT_DIR=/some/dir .venv/bin/python -m pytest tests/test_tui.py   # also save TUI screenshots (SVG)
 ```
 
 The tests cover deterministic scoring, LLM parsing and fallback, the scheduler (quiet hours, weekdays,

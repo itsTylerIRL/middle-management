@@ -111,7 +111,7 @@ async def test_review_read_aloud_with_llm(cfg, rng):
 
 async def test_review_filed_silently_with_template_when_llm_down(cfg, rng):
     store = Store(cfg.storage.database_path)
-    writer = ReviewWriter(cfg, store, FakeLLM(chat_reply=LLMError("pepper is napping")), rng)
+    writer = ReviewWriter(cfg, store, FakeLLM(chat_reply=LLMError("the LLM is napping")), rng)
     now = time.time()
     r = await writer.run(None, start=now - 3600, end=now + 1)
     assert r["author"] == "template" and not r["delivered"] and r["rating"] == 0
