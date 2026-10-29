@@ -52,10 +52,45 @@ class ListenResult:
         return asdict(self)
 
 
+@dataclass
+class BargeIn:
+    """How to react if the user talks while the manager is speaking.
+
+    yield:     stop talking and keep recording; the user's speech is returned (as with listen).
+    talk_over: keep talking, louder by `boost` (still capped), and just report that it happened.
+    """
+
+    mode: str = "yield"
+    listen: ListenRequest = field(default_factory=ListenRequest)
+    boost: float = 1.25
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"mode": self.mode, "listen": self.listen.to_dict(), "boost": self.boost}
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "BargeIn":
+        listen = ListenRequest(**{k: v for k, v in (d.get("listen") or {}).items()
+                                  if k in ListenRequest.__dataclass_fields__})
+        return cls(mode=str(d.get("mode", "yield")), listen=listen, boost=float(d.get("boost", 1.25)))
+
+
+@dataclass
+class SayResult:
+    barged_in: bool = False
+    # Populated in yield mode: what the user said after cutting in.
+    text: str = ""
+    speech_seconds: float = 0.0
+    interrupted: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 class AudioPort(Protocol):
     async def chime(self) -> None: ...
 
-    async def say(self, text: str, *, length_scale: float | None = None) -> None: ...
+    async def say(self, text: str, *, length_scale: float | None = None, barge_in: BargeIn | None = None,
+                  gain: float = 1.0) -> SayResult: ...
 
     async def listen(self, req: ListenRequest) -> ListenResult: ...
 
@@ -75,8 +110,9 @@ class LocalAudioPort:
     async def chime(self) -> None:
         await self.engine.chime()
 
-    async def say(self, text: str, *, length_scale: float | None = None) -> None:
-        await self.engine.say(text, length_scale=length_scale)
+    async def say(self, text: str, *, length_scale: float | None = None, barge_in: BargeIn | None = None,
+                  gain: float = 1.0) -> SayResult:
+        return await self.engine.say(text, length_scale=length_scale, barge_in=barge_in, gain=gain)
 
     async def listen(self, req: ListenRequest) -> ListenResult:
         return await self.engine.listen(req)
@@ -100,10 +136,12 @@ class ConsoleAudioPort:
         if self.speaker:
             await self.speaker.chime()
 
-    async def say(self, text: str, *, length_scale: float | None = None) -> None:
+    async def say(self, text: str, *, length_scale: float | None = None, barge_in: BargeIn | None = None,
+                  gain: float = 1.0) -> SayResult:
         self.print(f"[bold cyan]Manager:[/] {text}")
         if self.speaker:
-            await self.speaker.say(text, length_scale=length_scale)
+            await self.speaker.say(text, length_scale=length_scale, gain=gain)
+        return SayResult()
 
     async def listen(self, req: ListenRequest) -> ListenResult:
         text = await asyncio.to_thread(input, "Your status update> ")
@@ -124,7 +162,11 @@ class MockAudioPort:
     responses: list[str] = field(default_factory=list)
     interrupted: bool = False
     fail_on: str | None = None
+    # say-call index -> what the user says while barging in on that utterance
+    barge_at: dict[int, str] = field(default_factory=dict)
     log: list[tuple[str, Any]] = field(default_factory=list)
+    gains: list[float] = field(default_factory=list)
+    _says: int = 0
 
     def _check(self, op: str) -> None:
         if self.fail_on == op:
@@ -134,9 +176,19 @@ class MockAudioPort:
         self._check("chime")
         self.log.append(("chime", None))
 
-    async def say(self, text: str, *, length_scale: float | None = None) -> None:
+    async def say(self, text: str, *, length_scale: float | None = None, barge_in: BargeIn | None = None,
+                  gain: float = 1.0) -> SayResult:
         self._check("say")
         self.log.append(("say", text))
+        self.gains.append(gain)
+        idx, self._says = self._says, self._says + 1
+        if barge_in is None or idx not in self.barge_at:
+            return SayResult()
+        said = self.barge_at[idx]
+        self.log.append(("barge_in", (barge_in.mode, said)))
+        if barge_in.mode == "yield":
+            return SayResult(barged_in=True, text=said, speech_seconds=len(said.split()) / 2.5)
+        return SayResult(barged_in=True)
 
     async def listen(self, req: ListenRequest) -> ListenResult:
         self._check("listen")

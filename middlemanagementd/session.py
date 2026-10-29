@@ -9,19 +9,20 @@ import random
 import re
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from .audio.port import AudioError, AudioPort, ListenRequest
+from .audio.port import AudioError, AudioPort, BargeIn, ListenRequest, ListenResult
 from .config import Config
-from .escalation import (INTERRUPT_LINES, LEVEL_NAMES, SILENCE_LINES, EscalationEngine, fallback_line)
+from .escalation import (INTERRUPT_LINES, LEVEL_NAMES, SILENCE_LINES, TALK_OVER_LINES, YIELD_RESUME_LINES,
+                         YIELD_WIN_LINES, EscalationEngine, fallback_line)
 from .evaluator import Evaluation, JargonEvaluator
 from .llm import LLMClient, LLMError, sentences
 from .logs import event
 from .personalities import Personality, pick_personality
 from .prompts import character_messages
 from .reputation import Store, rank_for
-from .scoring import terms_used
+from .scoring import score_text, terms_used, weighted_overall
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +34,19 @@ _UNSPEAKABLE = re.compile(r"[*_#`~>\[\]]|[\U0001F000-\U0001FAFF☀-➿]")
 def speakable(text: str) -> str:
     text = _UNSPEAKABLE.sub("", text)
     return re.sub(r"\s+", " ", text).strip().strip('"').strip()
+
+
+@dataclass
+class _Feedback:
+    """Mutable state while the manager delivers feedback and the user may talk over it."""
+
+    talk_over: bool
+    gain: float = 1.0
+    spoken: list[str] = field(default_factory=list)
+    interjections: list[str] = field(default_factory=list)
+    barge_ins: int = 0
+    retort_owed: bool = False
+    conceded: bool = False
 
 
 @dataclass
@@ -51,6 +65,7 @@ class SessionOutcome:
     rank_after: str
     record_id: int
     duration_seconds: float
+    barge_ins: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -83,14 +98,22 @@ class InterrogationRunner:
         else:
             question = persona.random_question(self.rng)
         self.emit("question", {"personality": persona.title, "text": question})
-        await audio.say(question, length_scale=persona.length_scale)
-
         lc = self.cfg.listen
-        result = await audio.listen(ListenRequest(
+        listen_req = ListenRequest(
             max_seconds=lc.speech_timeout_seconds, start_timeout=lc.grace_period_seconds,
             end_silence=lc.end_silence_seconds, min_speech=lc.min_speech_seconds,
             interrupt_after=self.escalation.interrupt_after(level_before),
-        ))
+        )
+        # Eager employees may start answering before the question is over; the manager lets them.
+        asked = await audio.say(question, length_scale=persona.length_scale,
+                                barge_in=self._barge_in("yield", listen_req))
+        barge_ins = 0
+        if asked.barged_in and asked.text:
+            barge_ins += 1
+            self.emit("barge_in", {"phase": "question", "mode": "yield", "text": asked.text})
+            result = ListenResult(text=asked.text, speech_seconds=asked.speech_seconds, interrupted=asked.interrupted)
+        else:
+            result = await audio.listen(listen_req)
         transcript = result.text.strip()
         self.emit("transcript", {"text": transcript, "interrupted": result.interrupted,
                                  "speech_seconds": round(result.speech_seconds, 1)})
@@ -107,11 +130,20 @@ class InterrogationRunner:
         self.emit("evaluation", evaluation.to_dict())
 
         stage, level_after, pip_info, pip_issued = self._decide(evaluation, transcript, level_before, pip)
-        feedback = await self._speak_character(
-            audio, persona, stage, question=question, transcript=transcript, evaluation=evaluation,
+        fb = _Feedback(talk_over=level_after >= self.cfg.escalation.talk_over_level)
+        await self._speak_character(
+            audio, persona, stage, fb, question=question, transcript=transcript, evaluation=evaluation,
             interrupted=result.interrupted, pip_terms=(pip_info or {}).get("terms"),
             pip_used=len((pip_info or {}).get("used", [])),
         )
+        feedback = " ".join(fb.spoken)
+        barge_ins += fb.barge_ins
+        if fb.conceded and level_after > 0:
+            # A sufficiently corporate interjection talks the manager down a notch.
+            level_after -= 1
+            self.emit("conceded", {"level": level_after})
+        if barge_ins:
+            self.store.set("barge_ins", int(self.store.get("barge_ins", 0)) + barge_ins)
         self.emit("feedback", {"stage": stage, "level": level_after, "text": feedback})
 
         record_id = self.store.record(
@@ -131,7 +163,7 @@ class InterrogationRunner:
             personality=persona.title, question=question, transcript=transcript, interrupted=result.interrupted,
             evaluation=evaluation.to_dict(), level_before=level_before, level_after=level_after, stage=str(stage),
             feedback=feedback, pip=pip_info, rank_before=rank_before, rank_after=rank_after, record_id=record_id,
-            duration_seconds=round(time.monotonic() - started, 1),
+            duration_seconds=round(time.monotonic() - started, 1), barge_ins=barge_ins,
         )
         event(log, "interrogation finished", passed=evaluation.passed, overall=evaluation.overall,
               evaluator=evaluation.evaluator, level=level_after, stage=str(stage))
@@ -176,12 +208,53 @@ class InterrogationRunner:
             with contextlib.suppress(asyncio.CancelledError, AudioError):
                 await hold
 
-    async def _speak_character(self, audio: AudioPort, persona: Personality, stage: str | int, *, question: str,
-                               transcript: str, evaluation: Evaluation, interrupted: bool,
-                               pip_terms: list[str] | None, pip_used: int) -> str:
+    def _barge_in(self, mode: str, listen: ListenRequest | None = None) -> BargeIn | None:
+        if not self.cfg.audio.barge_in:
+            return None
+        if listen is None:
+            lc = self.cfg.listen
+            listen = ListenRequest(max_seconds=20, start_timeout=2, end_silence=lc.end_silence_seconds,
+                                   min_speech=lc.min_speech_seconds)
+        return BargeIn(mode=mode, listen=listen, boost=self.cfg.escalation.talk_over_boost)
+
+    def _jargon_passes(self, text: str, persona: Personality) -> bool:
+        """Instant rules-only verdict on an interjection (no time to consult the LLM mid-sentence)."""
+        rules = score_text(text, self.evaluator.dictionary)
+        return weighted_overall(rules.scores, self.evaluator.weights(persona)) >= self.evaluator.threshold(persona)
+
+    async def _say_feedback(self, audio: AudioPort, persona: Personality, text: str, length_scale: float,
+                            fb: _Feedback) -> None:
+        if fb.retort_owed:
+            retort = self.rng.choice(TALK_OVER_LINES)
+            await audio.say(retort, length_scale=length_scale, gain=fb.gain)
+            fb.spoken.append(retort)
+            fb.retort_owed = False
+        res = await audio.say(text, length_scale=length_scale, gain=fb.gain,
+                              barge_in=self._barge_in("talk_over" if fb.talk_over else "yield"))
+        fb.spoken.append(text)
+        if not res.barged_in:
+            return
+        fb.barge_ins += 1
+        if fb.talk_over:
+            # Refuse to yield: get louder (the audio client still enforces max_volume) and say so.
+            fb.gain *= self.cfg.escalation.talk_over_boost
+            fb.retort_owed = True
+            self.emit("barge_in", {"phase": "feedback", "mode": "talk_over"})
+            return
+        self.emit("barge_in", {"phase": "feedback", "mode": "yield", "text": res.text})
+        fb.interjections.append(res.text)
+        if res.text and self._jargon_passes(res.text, persona):
+            line, fb.conceded = self.rng.choice(YIELD_WIN_LINES), True
+        else:
+            line = self.rng.choice(YIELD_RESUME_LINES)
+        await audio.say(line, length_scale=length_scale, gain=fb.gain)
+        fb.spoken.append(line)
+
+    async def _speak_character(self, audio: AudioPort, persona: Personality, stage: str | int, fb: _Feedback, *,
+                               question: str, transcript: str, evaluation: Evaluation, interrupted: bool,
+                               pip_terms: list[str] | None, pip_used: int) -> None:
         meltdown = self.escalation.is_monologue(stage)
         length_scale = persona.length_scale * (0.85 if meltdown else 1.0)
-        spoken: list[str] = []
 
         if self.llm is not None and self.llm.enabled and self.cfg.escalation.use_llm:
             max_tokens = (self.cfg.llm.max_tokens_monologue if meltdown else
@@ -196,10 +269,11 @@ class InterrogationRunner:
                                            else self.cfg.audio.max_utterance_seconds)
             queue: asyncio.Queue[str | None] = asyncio.Queue()
             failure: list[Exception] = []
+            llm = self.llm
 
             async def produce() -> None:
                 try:
-                    async for sentence in sentences(self.llm.stream(messages, max_tokens=max_tokens)):
+                    async for sentence in sentences(llm.stream(messages, max_tokens=max_tokens)):
                         await queue.put(sentence)
                 except LLMError as e:
                     failure.append(e)
@@ -211,9 +285,8 @@ class InterrogationRunner:
             try:
                 while (sentence := await queue.get()) is not None:
                     if text := speakable(sentence):
-                        await audio.say(text, length_scale=length_scale)
-                        spoken.append(text)
-                    if time.monotonic() > deadline:
+                        await self._say_feedback(audio, persona, text, length_scale, fb)
+                    if fb.conceded or time.monotonic() > deadline:
                         break
             finally:
                 producer.cancel()
@@ -222,16 +295,17 @@ class InterrogationRunner:
             if failure:
                 event(log, "character speech fell back to fixed lines", logging.WARNING, error=str(failure[0])[:200])
 
-        if not spoken:
-            line = fallback_line(stage, self.rng, pip_terms)
-            await audio.say(line, length_scale=length_scale)
-            spoken.append(line)
-        if stage == 5 and pip_terms and not any(pip_terms[0].lower() in s.lower() for s in spoken):
+        if not fb.spoken:
+            await self._say_feedback(audio, persona, fallback_line(stage, self.rng, pip_terms), length_scale, fb)
+        if fb.retort_owed:
+            retort = self.rng.choice(TALK_OVER_LINES)
+            await audio.say(retort, length_scale=length_scale, gain=fb.gain)
+            fb.spoken.append(retort)
+        if stage == 5 and pip_terms and not any(pip_terms[0].lower() in s.lower() for s in fb.spoken):
             # The exercise terms must be heard, whatever the LLM decided to say.
             reminder = f"Your required terms are: {', '.join(pip_terms)}."
             await audio.say(reminder, length_scale=persona.length_scale)
-            spoken.append(reminder)
-        return " ".join(spoken)
+            fb.spoken.append(reminder)
 
 
 def level_name(level: int) -> str:

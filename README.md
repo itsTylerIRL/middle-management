@@ -41,7 +41,7 @@ answers (`--speak` to hear the manager anyway). `middlemanagementd evaluate "you
 | `status` | State, audio client, next interrogation, escalation level, rank, LLM health |
 | `stats` / `history` | Corporate reputation and recent interrogations |
 | `config [--init]` | Show the effective config / write a starter config |
-| `test-audio [--only chime hold tts mic]` | Device check on this machine |
+| `test-audio [--only chime hold tts mic barge]` | Device check on this machine; `barge` tunes talk-over detection |
 | `evaluate TEXT [--no-llm] [--json]` | Grade text without audio |
 | `rehearse [--speak] [--level N] [-p P]` | Interactive text session; in-memory unless `--record` |
 | `download-models` | Fetch the configured Piper voice and Whisper model |
@@ -118,6 +118,35 @@ Failures add `aggressiveness` levels, and passes remove `decay_on_pass`. Passing
 Ranks run from *Unaligned Individual Contributor* to *Global Thought Leadership Evangelist*, driven by synergy
 points (pass: +score/8, fail: −2, PIP: −15).
 
+## Talking over the manager
+
+You can cut in while the manager is speaking:
+
+| When | What happens |
+|---|---|
+| During the question | The manager stops and your speech becomes the answer (eager, but allowed) |
+| Feedback at levels 0–2 | The manager yields. If your interjection is corporate enough, it concedes ("let's take the rest offline") and your escalation level drops by one. Otherwise: "Let's put a pin in that. As I was saying…" |
+| Feedback at level 3+ | The manager refuses to yield: "I'm still talking." Each interruption makes it louder (still capped by `max_volume`) |
+
+`stats` counts the times you talked over management.
+
+**How it hears you over itself:** the client knows what it is playing, so it predicts the energy of its own echo at
+the mic, using an echo gain and delay calibrated from the chime and refined after every uninterrupted sentence.
+You count as talking over it when the mic is clearly louder than that prediction for about 0.35 s.
+
+* **Headphones**: calibration measures no echo, so this is just a voice detector and works well.
+* **Speakers**: you must be clearly louder than the manager *at the microphone*. It helps to keep the speaker
+  volume sane, use a mic close to you, and keep other audio off. Run `middlemanagementd test-audio --only barge`:
+  it shows how close your voice gets to the threshold and suggests a `barge_in_ratio`.
+* `echo_cancel: pipewire` loads PipeWire's WebRTC echo canceller at runtime, nothing persisted. On chef's
+  HDMI output it was inconsistent in testing, so it's off by default; try it if your hardware cooperates.
+
+## Hold music
+
+While the LLM deliberates, the client plays synthesized elevator jazz. To use your own track (*Opus No. 1*,
+say), point `audio.hold_music_file` at a copy you have. Any format ffmpeg reads works. It restarts from the
+top on every hold, as is traditional.
+
 ## Safety and privacy
 
 * **It can always be silenced**: `hush` (local, instant), `kill` (global, persistent),
@@ -133,7 +162,7 @@ points (pass: +score/8, fail: −2, PIP: −15).
 ## Development
 
 ```bash
-.venv/bin/python -m pytest      # 57 tests; mock audio + fake LLM, no devices or network needed
+.venv/bin/python -m pytest      # 70 tests; mock audio + fake LLM, no devices or network needed
 ```
 
 The tests cover deterministic scoring, LLM parsing and fallback, the scheduler (quiet hours, weekdays,
@@ -142,8 +171,7 @@ the daemon and audio client over a real WebSocket, including the kill switch and
 
 ## Known limitations
 
-* Half-duplex: the manager talks over you, but can't hear you talking over it. That needs echo
-  cancellation (see ARCHITECTURE.md).
+* Over loud speakers you have to out-shout the manager at the mic for barge-in to register (see above).
 * The energy VAD is simple. In a loud room, raise `listen.energy_threshold` or use a headset.
 * With a ~27B model at ~7 tok/s, grading takes 20–35 s (hence the hold music). A smaller model makes the
   manager quicker but less eloquent.

@@ -28,8 +28,8 @@ from typing import Any
 from aiohttp import WSMsgType, web
 
 from . import __version__
-from .audio.port import (AudioError, AudioPort, AudioSilenced, AudioUnavailable, ListenRequest,
-                         ListenResult)
+from .audio.port import (AudioError, AudioPort, AudioSilenced, AudioUnavailable, BargeIn, ListenRequest,
+                         ListenResult, SayResult)
 from .config import Config, expand
 from .escalation import LEVEL_NAMES
 from .evaluator import JargonEvaluator
@@ -122,8 +122,15 @@ class RemoteAudioPort:
     async def chime(self) -> None:
         await self.hub.request("chime", {}, timeout=20)
 
-    async def say(self, text: str, *, length_scale: float | None = None) -> None:
-        await self.hub.request("say", {"text": text, "length_scale": length_scale}, timeout=40 + len(text) / 6)
+    async def say(self, text: str, *, length_scale: float | None = None, barge_in: BargeIn | None = None,
+                  gain: float = 1.0) -> SayResult:
+        args: dict[str, Any] = {"text": text, "length_scale": length_scale, "gain": gain}
+        timeout = 40 + len(text) / 6
+        if barge_in is not None:
+            args["barge_in"] = barge_in.to_dict()
+            timeout += barge_in.listen.max_seconds * 1.5 + 60  # may turn into a listen + transcription
+        data = await self.hub.request("say", args, timeout=timeout)
+        return SayResult(**{k: data[k] for k in SayResult.__dataclass_fields__ if k in data})
 
     async def listen(self, req: ListenRequest) -> ListenResult:
         timeout = req.start_timeout + req.max_seconds * 1.5 + 90

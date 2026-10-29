@@ -6,7 +6,7 @@ import aiohttp
 from aiohttp.test_utils import TestServer
 
 from middlemanagementd.audio.client import AudioClient
-from middlemanagementd.audio.port import ListenRequest, ListenResult
+from middlemanagementd.audio.port import ListenRequest, ListenResult, SayResult
 from middlemanagementd.daemon import Daemon
 
 from .conftest import JARGON
@@ -23,8 +23,9 @@ class FakeEngine:
     async def chime(self) -> None:
         pass
 
-    async def say(self, text: str, *, length_scale=None) -> None:
+    async def say(self, text: str, *, length_scale=None, barge_in=None, gain=1.0) -> SayResult:
         self.said.append(text)
+        return SayResult()
 
     async def hold_music(self, max_seconds: float) -> None:
         await asyncio.sleep(max_seconds)

@@ -17,7 +17,7 @@ from .. import __version__
 from ..config import Config
 from ..logs import event
 from .engine import AudioEngine
-from .port import AudioSilenced, AudioUnavailable, ListenRequest
+from .port import AudioSilenced, AudioUnavailable, BargeIn, ListenRequest
 
 log = logging.getLogger(__name__)
 
@@ -61,8 +61,10 @@ class AudioClient:
             await e.chime()
             return {}
         if op == "say":
-            await e.say(str(args["text"]), length_scale=args.get("length_scale"))
-            return {}
+            barge_in = BargeIn.from_dict(args["barge_in"]) if args.get("barge_in") else None
+            res = await e.say(str(args["text"]), length_scale=args.get("length_scale"), barge_in=barge_in,
+                              gain=float(args.get("gain", 1.0)))
+            return res.to_dict()
         if op == "hold_music":
             await e.hold_music(float(args.get("max_seconds", 60)))
             return {}
@@ -144,7 +146,7 @@ class AudioClient:
         try:
             await self.run()
         finally:
-            self.engine.kill_all()
+            self.engine.close()
             with contextlib.suppress(FileNotFoundError):
                 pid.unlink()
 

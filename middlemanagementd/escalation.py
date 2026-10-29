@@ -74,6 +74,26 @@ SILENCE_LINES = (
     "Hello? Are you on mute? You're on mute. Classic.",
 )
 
+# Talked over at a low level: the manager yields, then either concedes or resumes.
+YIELD_WIN_LINES = (
+    "You know what? That is exactly the energy I need. Let's take the rest of this offline.",
+    "Okay. Wow. You've clearly already internalized the feedback. I'll stop there.",
+    "Love that you're leaning in. Consider this conversation actioned.",
+)
+YIELD_RESUME_LINES = (
+    "Mm-hm. Let's put a pin in that. As I was saying,",
+    "Great point, let's park it. As I was saying,",
+    "Sorry, I'll let you finish in a moment. As I was saying,",
+)
+# Talked over at a high level: the manager refuses to yield.
+TALK_OVER_LINES = (
+    "I'm still talking.",
+    "Please hold your questions until the end.",
+    "Let me finish. Let me finish!",
+    "I'm going to need you to let me land this plane.",
+    "We'll open the floor for comments at the end. There will be no comments.",
+)
+
 INTERRUPT_LINES = (
     "I'm going to stop you right there.",
     "Let me just jump in here.",

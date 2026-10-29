@@ -73,9 +73,19 @@ class AudioConfig:
     max_volume: float = 0.85
     chime_gain: float = 1.0
     hold_music: bool = True
+    # Your own audio file (any format ffmpeg reads) to loop instead of the synthesized elevator jazz.
+    hold_music_file: str = ""
     hold_music_gain: float = 0.45
     # No single playback may exceed this, so nothing can drone on forever.
     max_utterance_seconds: float = 90.0
+    # Let the user talk over the manager. Detection is echo-aware (calibrated from the chime).
+    barge_in: bool = True
+    # Mic energy must exceed predicted echo + noise by this factor...
+    barge_in_ratio: float = 1.5
+    # ...for this long before it counts as talking over the manager.
+    barge_in_min_seconds: float = 0.35
+    # "none" (raw devices; fine with headphones) or "pipewire" (load module-echo-cancel at runtime).
+    echo_cancel: str = "none"
 
 
 @dataclass
@@ -148,6 +158,9 @@ class EscalationConfig:
     # Seconds of your speech the manager tolerates before cutting you off, by current level.
     interrupt_after_seconds: dict[int, float] = field(default_factory=lambda: {3: 30.0, 4: 12.0, 5: 20.0})
     monologue_max_seconds: float = 75.0
+    # From this level up, the manager refuses to yield when talked over and gets louder instead.
+    talk_over_level: int = 3
+    talk_over_boost: float = 1.25
     pip_required_terms: int = 5
     pip_terms_to_pass: int = 4
     use_llm: bool = True
@@ -236,6 +249,8 @@ def validate(cfg: Config) -> None:
         raise ValueError("scheduler.frequency must be > 0")
     if not 0 < cfg.audio.max_volume <= 1.0:
         raise ValueError("audio.max_volume must be in (0, 1]")
+    if cfg.audio.echo_cancel not in ("none", "pipewire"):
+        raise ValueError("audio.echo_cancel must be 'none' or 'pipewire'")
     if cfg.evaluation.difficulty not in cfg.evaluation.pass_thresholds:
         raise ValueError(f"evaluation.difficulty must be one of {sorted(cfg.evaluation.pass_thresholds)}")
     if not 0.0 <= cfg.evaluation.llm_weight <= 1.0:

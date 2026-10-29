@@ -130,3 +130,58 @@ async def test_rank_promotion_announced(cfg, rng):
         await runner.run(MockAudioPort(responses=[JARGON]))
     assert any(k == "rank_change" for k, _ in events)
     assert store.stats()["rank_number"] >= 2
+
+
+async def test_answering_during_the_question_skips_listen(cfg, rng):
+    runner, _, events = make_runner(cfg, rng)
+    audio = MockAudioPort(barge_at={0: JARGON})  # cut in on the question itself
+    out = await runner.run(audio)
+    assert "listen" not in [op for op, _ in audio.log]
+    assert out.transcript == JARGON and out.evaluation["passed"] and out.barge_ins == 1
+    assert any(k == "barge_in" for k, _ in events)
+
+
+async def test_low_level_manager_yields_and_concedes_to_good_jargon(cfg, rng):
+    llm = FakeLLM(chat_reply=None, stream_reply="You need more strategy. Much more. Think bigger.")
+    runner, store, events = make_runner(cfg, rng, llm)
+    store.level = 1
+    # say #0 question, #1 filler, #2 first feedback sentence: talk over it with jargon.
+    audio = MockAudioPort(responses=[PLAIN], barge_at={2: JARGON})
+    out = await runner.run(audio)
+    assert ("barge_in", ("yield", JARGON)) in audio.log
+    assert out.level_after == 1  # would have been 2; the manager conceded a level
+    assert "Much more." not in out.feedback  # stopped talking
+    assert store.stats()["times_talked_over_management"] == 1
+
+
+async def test_low_level_manager_resumes_after_weak_interjection(cfg, rng):
+    llm = FakeLLM(chat_reply=None, stream_reply="You need more strategy. Much more. Think bigger.")
+    runner, store, _ = make_runner(cfg, rng, llm)
+    audio = MockAudioPort(responses=[PLAIN], barge_at={2: "no I fixed the bug"})
+    out = await runner.run(audio)
+    assert "As I was saying" in out.feedback and "Think bigger." in out.feedback
+    assert out.level_after == 1
+
+
+async def test_high_level_manager_talks_over_you_louder(cfg, rng):
+    llm = FakeLLM(chat_reply=None, stream_reply="Synergy is a journey. Alignment is a mindset. Are we aligned?")
+    runner, store, _ = make_runner(cfg, rng, llm)
+    store.level = 3
+    audio = MockAudioPort(responses=[PLAIN], barge_at={2: "x", 4: "x"})
+    out = await runner.run(audio)
+    assert out.stage == "4" and out.barge_ins == 2
+    modes = [arg[0] for op, arg in audio.log if op == "barge_in"]
+    assert modes == ["talk_over", "talk_over"]
+    assert max(audio.gains) == pytest.approx(cfg.escalation.talk_over_boost ** 2)
+    # The monologue continued, and retorts were inserted.
+    assert "Are we aligned?" in out.feedback
+    from middlemanagementd.escalation import TALK_OVER_LINES
+    assert sum(line in out.feedback for line in TALK_OVER_LINES) >= 1
+
+
+async def test_barge_in_disabled(cfg, rng):
+    cfg.audio.barge_in = False
+    runner, _, _ = make_runner(cfg, rng)
+    audio = MockAudioPort(responses=[JARGON], barge_at={0: "ignored"})
+    out = await runner.run(audio)
+    assert out.barge_ins == 0 and "listen" in [op for op, _ in audio.log]

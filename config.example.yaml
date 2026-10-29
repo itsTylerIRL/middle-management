@@ -44,8 +44,16 @@ audio:                            # read by the audio client
   max_volume: 0.85                # hard cap, enforced client-side (relative to the system volume)
   chime_gain: 1.0
   hold_music: true                # elevator jazz while the LLM deliberates
+  hold_music_file: ""             # your own track instead (any format ffmpeg reads), e.g. ~/Music/opus-no-1.mp3
   hold_music_gain: 0.45
   max_utterance_seconds: 90       # no single playback may run longer
+  # Talking over the manager. Detection is echo-aware: the client predicts how loud the manager's own
+  # voice is at the mic (calibrated from the chime and from each sentence) and only counts energy beyond it.
+  # Tune with: middlemanagementd test-audio --only barge
+  barge_in: true
+  barge_in_ratio: 1.5             # how far above predicted echo + noise you must be
+  barge_in_min_seconds: 0.35      # ...for this long
+  echo_cancel: none               # none | pipewire (loads module-echo-cancel at runtime, unloaded on exit)
 
 listen:
   speech_timeout_seconds: 60      # longest status report accepted
@@ -94,6 +102,8 @@ escalation:
     4: 12
     5: 20
   monologue_max_seconds: 75
+  talk_over_level: 3              # from this level the manager won't yield when talked over; it gets louder
+  talk_over_boost: 1.25           # per interruption, still capped by audio.max_volume
   pip_required_terms: 5
   pip_terms_to_pass: 4
   use_llm: true

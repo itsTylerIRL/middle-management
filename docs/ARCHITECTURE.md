@@ -42,7 +42,8 @@ For a single machine, `middlemanagementd serve --local-audio` runs the same engi
 | `reputation.py` | SQLite: history, buzzword counts, PIPs, persisted state (level, pause, kill switch), ranks |
 | `llm.py` | OpenAI-compatible client: timeouts, retries with backoff, SSE streaming, sentence splitter |
 | `audio/port.py` | `AudioPort` protocol + Local / Console / Mock adapters |
-| `audio/engine.py` | The real thing: chime, hold music, say, listen (VAD → STT) |
+| `audio/engine.py` | The real thing: chime, hold music, say (with barge-in), listen (VAD → STT) |
+| `audio/echo.py` | Echo model, calibration, barge-in detector |
 | `audio/client.py` | WebSocket client that executes ops; local hush via SIGUSR1 |
 | `cli.py` | Rich terminal UI over the HTTP API |
 
@@ -79,7 +80,20 @@ follows within one audio buffer.
 
 * **Web dashboard**: everything the CLI shows comes from `/api/status`, `/api/stats`, `/api/history`
   and `/api/events?since=N` (an event stream for a live view). A dashboard is just another API client.
-* **Barge-in / true full-duplex**: currently the manager talks over *you* (record → cut off → speak).
-  Detecting you talking over *it* needs echo cancellation (PipeWire `libpipewire-module-echo-cancel`)
-  so the mic doesn't hear the speakers. Add it as a `say(..., listen=True)` op once AEC is set up.
+* **Better barge-in**: replace the envelope echo model (`audio/echo.py`) with a proper adaptive filter, or
+  add a Silero VAD gate.
+
+## Full duplex
+
+Both directions work. The manager cuts *you* off (`listen` with `interrupt_after`), and you can cut *it* off.
+`say` takes an optional `barge_in` (`yield` or `talk_over`). While playing, the client also records, and
+`BargeInDetector` compares each mic frame with the predicted echo:
+
+    threshold = ratio × (echo_gain × max(ref_envelope[t − delay − tail … t − delay]) + noise) + margin
+
+`EchoModel` (gain, delay) is fitted from the chime and refined from every uninterrupted sentence, and fits
+with poor correlation are rejected. Playback is paced to at most 0.25 s ahead of real time, so echo timing
+is stable. Mic frames are indexed by sample count, not arrival time, because they arrive in bursts. In
+`yield` mode the client kills playback and keeps the same recording going as a normal listen, including a
+pre-roll so your first words survive. In `talk_over` mode it raises the gain of the remaining chunks.
 * **Silero VAD**: `audio/vad.py` is energy-based. faster-whisper bundles a Silero model if the room is noisy.

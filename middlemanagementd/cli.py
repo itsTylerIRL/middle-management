@@ -108,6 +108,14 @@ def render_event(e: dict[str, Any]) -> None:
         level = d.get("level", 0)
         console.print(Panel(d["text"], title=f"Feedback: level {level} {LEVEL_NAMES.get(level, '')}",
                             border_style="red" if level >= 3 else "yellow" if level else "green"))
+    elif t == "barge_in":
+        if d["mode"] == "talk_over":
+            console.print("[bold red]You talked over management.[/] [dim]Management is now louder.[/]")
+        else:
+            console.print(f"[yellow]You cut in{' on the question' if d['phase'] == 'question' else ''}:[/] "
+                          f"{d.get('text') or '(inaudible)'}")
+    elif t == "conceded":
+        console.print(f"[bold green]Management concedes.[/] Escalation reduced to level {d['level']}.")
     elif t == "rank_change":
         console.print(f"[bold]Title change:[/] {d['from']} → [bold green]{d['to']}[/]")
     elif t == "session_aborted":
@@ -130,6 +138,7 @@ def render_stats(s: dict[str, Any]) -> None:
     t.add_row("Longest successful monologue", f"{s['longest_successful_monologue_words']} words")
     t.add_row("Consecutive successes", f"{s['consecutive_successes']} (best {s['best_streak']})")
     t.add_row("PIPs issued", str(s["pips_issued"]))
+    t.add_row("Times you talked over management", str(s.get("times_talked_over_management", 0)))
     if s.get("open_pip"):
         t.add_row("[red]Open PIP[/]", ", ".join(s["open_pip"]["terms"]))
     console.print(t)
@@ -336,7 +345,7 @@ def cmd_config(cfg: Config, args: argparse.Namespace) -> int:
 def cmd_test_audio(cfg: Config, args: argparse.Namespace) -> int:
     from .audio.devices import list_devices
     from .audio.engine import AudioEngine
-    from .audio.port import AudioError, ListenRequest
+    from .audio.port import AudioError, BargeIn, ListenRequest
 
     console.print(f"Output devices: {list_devices('sinks') or '[red]none / pactl unavailable[/]'}")
     console.print(f"Input devices:  {[d for d in list_devices('sources') if not d.endswith('.monitor')]}")
@@ -363,6 +372,39 @@ def cmd_test_audio(cfg: Config, args: argparse.Namespace) -> int:
             try:
                 await fn()
                 console.print("  [green]ok[/]")
+            except AudioError as e:
+                failures += 1
+                console.print(f"  [red]failed: {e}[/]")
+        if "barge" in which:
+            console.print("[cyan]▶ Talking over management[/] Calibrating echo with the chime...")
+            try:
+                engine.tts.load()
+                engine.stt.load()
+                await engine.chime()
+                m = engine.echo
+                console.print(f"  echo model: gain {m.gain:.2f}, delay {m.delay_frames * 30} ms, "
+                              f"{'calibrated' if m.calibrated else '[yellow]defaults (calibration rejected)[/]'}; "
+                              f"noise floor {engine.noise_floor or 0:.3f}")
+                monologue = ("Let me be crystal clear about the opportunity space here. When we talk about strategic "
+                             "alignment, we are talking about aligning the alignment itself, holistically, at scale, "
+                             "across every swim lane in the ecosystem.")
+                await engine.say(monologue, barge_in=BargeIn(mode="talk_over"))
+                quiet = engine.last_barge_ratio
+                console.print(f"  manager alone: reached {quiet:.2f} of threshold "
+                              + ("[green](no false trigger)[/]" if quiet < 1 else "[yellow](noisy; raise barge_in_ratio)[/]"))
+                console.print("  [bold]Now talk over me, loudly, as soon as I start.[/]")
+                await asyncio.sleep(1.0)
+                res = await engine.say(monologue, barge_in=BargeIn(mode="yield", listen=ListenRequest(
+                    max_seconds=10, start_timeout=2, end_silence=1.2)))
+                peak = engine.last_barge_ratio
+                if res.barged_in:
+                    console.print(f"  [green]Detected you talking over management[/] ({peak:.1f}x threshold). "
+                                  f"Heard: [bold]{res.text or '(inaudible)'}[/]")
+                else:
+                    failures += 1
+                    console.print(f"  [red]Not detected[/]: your loudest moment reached {peak:.2f} of the threshold. "
+                                  f"Try headphones, lower speaker volume, or audio.barge_in_ratio "
+                                  f"≈ {max(1.2, cfg.audio.barge_in_ratio * peak * 0.9):.1f}.")
             except AudioError as e:
                 failures += 1
                 console.print(f"  [red]failed: {e}[/]")
@@ -520,7 +562,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--init", action="store_true", help="write ~/.config/middlemanagementd/config.yaml")
     s.set_defaults(func=cmd_config)
     s = sub.add_parser("test-audio", help="test speakers, TTS, microphone and STT on this machine")
-    s.add_argument("--only", nargs="+", choices=["chime", "hold", "tts", "mic"])
+    s.add_argument("--only", nargs="+", choices=["chime", "hold", "tts", "mic", "barge"])
     s.set_defaults(func=cmd_test_audio)
     s = sub.add_parser("evaluate", help="grade text without audio")
     s.add_argument("text", nargs="*")

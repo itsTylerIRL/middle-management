@@ -194,6 +194,7 @@ class Store:
             "consecutive_successes": self.get("streak", 0),
             "best_streak": self.get("best_streak", 0),
             "pips_issued": pips,
+            "times_talked_over_management": int(self.get("barge_ins", 0)),
             "escalation_level": self.level,
             "open_pip": (p := self.open_pip()) and {"id": p.id, "terms": p.terms},
         }
