@@ -238,3 +238,21 @@ async def test_delete_and_reset_over_http(cfg):
         assert daemon.store.stats()["total_interrogations"] == 0
     finally:
         await server.close()
+
+
+async def test_client_explains_routes_an_older_daemon_lacks(cfg):
+    from aiohttp import web
+
+    from middlemanagementd.cli import ApiError, api
+
+    server = TestServer(web.Application())  # a daemon with none of the routes
+    await server.start_server()
+    cfg.server.url = str(server.make_url("/"))
+    try:
+        await asyncio.to_thread(api, cfg, "DELETE", "/api/history/1")
+    except ApiError as e:
+        assert "older than this client" in str(e) and "DELETE /api/history" in str(e)
+    else:
+        raise AssertionError("expected ApiError")
+    finally:
+        await server.close()

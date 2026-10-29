@@ -45,6 +45,18 @@ python3 -m venv .venv
 .venv/bin/middlemanagementd trigger                # interrogate me now
 ```
 
+### Updating
+
+```bash
+middlemanagementd update --check   # what's new
+middlemanagementd update           # pull it, reinstall if needed, restart the daemon and audio client
+```
+
+`update` fast-forwards your checkout (it stops if you have local commits or changes in the way), reinstalls when
+`pyproject.toml` changed (keeping the `audio` extra if you have it), and restarts whatever was running, through
+systemd or as the background processes `start` creates. It waits if an interrogation is in progress. If your
+daemon runs on another machine, run `update` there too. Restart any open consoles afterwards.
+
 No microphone handy? `middlemanagementd rehearse` runs a full interrogation in the terminal with typed
 answers (`--speak` to hear the manager anyway). `middlemanagementd evaluate "your text"` just grades text.
 
@@ -69,6 +81,7 @@ answers (`--speak` to hear the manager anyway). `middlemanagementd evaluate "you
 | `test-audio [--only chime hold tts mic barge]` | Device check on this machine; `barge` tunes talk-over detection |
 | `evaluate TEXT [--no-llm] [--json]` | Grade text without audio |
 | `rehearse [--speak] [--level N] [-p P]` | Interactive text session; in-memory unless `--record` |
+| `update [--check] [--no-restart]` | Pull the latest version from git, reinstall if dependencies changed, restart what was running |
 | `download-models` | Fetch the configured Piper voice and Whisper model |
 
 Personalities: `passive_aggressive`, `big_four`, `disappointed_vp`, `scrum_master`, `linkedin`,

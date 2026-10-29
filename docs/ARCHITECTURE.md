@@ -40,6 +40,7 @@ For a single machine, `middlemanagementd serve --local-audio` runs the same engi
 | `prompts.py` | Evaluator and character prompts (see `docs/evaluation-prompts.md`) |
 | `escalation.py` | Levels 0–5, interruption policy, PIP rules, fallback lines |
 | `practice.py` | Coaching after each interrogation (LLM rewrite, or rules-based tips) and the word of the day |
+| `update.py` | Self-update for git checkouts: fetch, fast-forward, reinstall on dependency changes |
 | `review.py` | Weekly performance review: period summary, code-decided rating, LLM/template write-up, delivery |
 | `reputation.py` | SQLite: history, buzzword counts, PIPs, reviews, persisted state (level, pause, kill switch), ranks; adds new columns to old databases |
 | `llm.py` | OpenAI-compatible client: timeouts, retries with backoff, SSE streaming, sentence splitter |

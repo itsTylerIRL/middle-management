@@ -11,12 +11,14 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -48,6 +50,10 @@ def api(cfg: Config, method: str, path: str, body: dict[str, Any] | None = None,
             payload = json.loads(e.read())
         except ValueError:
             payload = {"error": str(e)}
+            if e.code in (404, 405):
+                # Our handlers answer in JSON; a bare 404/405 is a route this daemon doesn't have.
+                payload["error"] = (f"the daemon doesn't support {method} {path.split('?')[0]}; it is probably "
+                                    "older than this client. Restart it to pick up the new version.")
         if e.code == 409:
             return payload
         raise ApiError(payload.get("error") or payload.get("message") or str(e)) from e
@@ -535,6 +541,95 @@ def cmd_rehearse(cfg: Config, args: argparse.Namespace) -> int:
     except (KeyboardInterrupt, EOFError):
         console.print("\n[dim]Meeting adjourned.[/]")
         return 0
+
+
+def _wait(condition, seconds: float) -> bool:  # noqa: ANN001
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if condition():
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def cmd_update(cfg: Config, args: argparse.Namespace) -> int:
+    from . import update
+
+    repo = update.checkout()
+    if repo is None:
+        console.print("This install isn't a git checkout. Update it with:\n"
+                      f"  {sys.executable} -m pip install --upgrade 'git+{update.REPO_URL}'")
+        return 1
+    try:
+        commits = update.pending(repo)
+    except update.UpdateError as e:
+        console.print(f"[red]{e}[/]")
+        return 1
+    if not commits:
+        console.print(f"[green]Already up to date[/] ({update.git(repo, 'rev-parse', '--short', 'HEAD')}).")
+        return 0
+    console.print(f"[bold]{len(commits)} new commit{'s' if len(commits) != 1 else ''}:[/]")
+    for line in commits:
+        sha, _, subject = line.partition(" ")
+        console.print(f"  [dim]{sha}[/] {escape(subject)}")
+    if args.check:
+        console.print("[dim]Run `middlemanagementd update` to install.[/]")
+        return 0
+
+    # What's running here, and how, so the same things come back on the new code.
+    local = urllib.parse.urlsplit(cfg.server.url).hostname in ("127.0.0.1", "localhost", "::1")
+    restart = not args.no_restart
+    units = [u for u in (update.DAEMON_UNIT, update.AUDIO_UNIT) if restart and update.unit_active(u)]
+    status = None
+    try:
+        status = api(cfg, "GET", "/api/status", timeout=3)
+    except ApiError:
+        pass
+    if restart and status and status["busy"]:
+        console.print("[yellow]An interrogation is in progress; run this again after it (or use --no-restart).[/]")
+        return 1
+    manual_daemon = restart and local and status is not None and update.DAEMON_UNIT not in units
+    manual_audio = restart and update.AUDIO_UNIT not in units and audio_client_running()
+
+    try:
+        old, new, changed = update.pull(repo)
+        if "pyproject.toml" in changed or args.reinstall:
+            console.print("Dependencies changed; reinstalling...")
+            update.reinstall(repo)
+        console.print(f"[green]Updated[/] {old} → {new}.")
+        if units:
+            update.restart_units(units)
+            console.print(f"Restarted {', '.join(units)}.")
+    except update.UpdateError as e:
+        console.print(f"[red]{e}[/]")
+        return 1
+
+    if manual_daemon:
+        api(cfg, "POST", "/api/shutdown")
+        if not _wait(lambda: not daemon_up(cfg), 20):
+            console.print("[red]The old daemon didn't stop; restart it by hand.[/]")
+            return 1
+    if manual_audio:
+        signal_audio_client(signal.SIGTERM)
+        _wait(lambda: not audio_client_running(), 10)
+    # _spawn runs a fresh interpreter, so these come back on the updated code.
+    try:
+        if manual_daemon:
+            for msg in start_background(cfg, with_audio=False):
+                console.print(msg)
+    except ApiError as e:
+        console.print(f"[red]{e}[/]")
+        return 1
+    if manual_audio:
+        pid = _spawn([*(["--config", cfg.source_path] if cfg.source_path else []), "audio-client"],
+                     "audio-client.log")
+        console.print(f"[green]Audio client restarted[/] (pid {pid}).")
+    if status is not None and not local:
+        console.print(f"[yellow]The daemon at {cfg.server.url} runs on another machine; update it there too.[/]")
+    elif not restart and (status is not None or audio_client_running()):
+        console.print("[dim]Restart the daemon and audio client to use the new version.[/]")
+    console.print("[dim]Restart any open consoles (`middlemanagementd tui`) as well.[/]")
+    return 0
 
 
 def cmd_tui(cfg: Config, args: argparse.Namespace) -> int:
