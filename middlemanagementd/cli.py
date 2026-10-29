@@ -24,7 +24,6 @@ from rich.table import Table
 
 from . import __version__, render
 from .config import Config, load_config
-from .escalation import LEVEL_NAMES
 from .logs import setup_logging
 
 console = Console()

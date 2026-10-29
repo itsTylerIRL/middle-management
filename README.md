@@ -296,6 +296,7 @@ bundled here:
 ```bash
 .venv/bin/python -m pytest      # 89 tests; mock audio + fake LLM, no devices or network needed
 MMD_SCREENSHOT_DIR=/some/dir .venv/bin/python -m pytest tests/test_tui.py   # also save TUI screenshots (SVG)
+.venv/bin/python docs/screenshots/generate.py   # regenerate the README screenshots (needs Fira Code + rsvg-convert)
 ```
 
 The tests cover deterministic scoring, LLM parsing and fallback, the scheduler (quiet hours, weekdays,

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "middlemanagementd"
-version = "0.1.0"
+version = "0.2.0"
 description = "Corporate Alignment Enforcement Daemon: demands verbal status reports and grades your synergy."
 readme = "README.md"
 requires-python = ">=3.12"
