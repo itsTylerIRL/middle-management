@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS interrogations (
     scores_json TEXT NOT NULL,
     jargon_json TEXT NOT NULL,
     feedback TEXT,
-    points REAL NOT NULL DEFAULT 0
+    points REAL NOT NULL DEFAULT 0,
+    barge_ins INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS buzzwords (
     term TEXT PRIMARY KEY,
@@ -61,7 +62,26 @@ CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    period_start REAL NOT NULL,
+    period_end REAL NOT NULL,
+    personality TEXT NOT NULL,
+    rating INTEGER NOT NULL,
+    rating_name TEXT NOT NULL,
+    summary_json TEXT NOT NULL,
+    review_json TEXT NOT NULL,
+    author TEXT NOT NULL,
+    trigger TEXT NOT NULL DEFAULT 'scheduled',
+    delivered INTEGER NOT NULL DEFAULT 0
+);
 """
+
+# Columns added after the first release, applied to existing databases on open.
+MIGRATIONS = (
+    ("interrogations", "barge_ins", "INTEGER NOT NULL DEFAULT 0"),
+)
 
 
 def rank_for(points: float) -> tuple[int, str]:
@@ -88,6 +108,10 @@ class Store:
         self.db = sqlite3.connect(self.path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        for table, column, decl in MIGRATIONS:
+            cols = {r["name"] for r in self.db.execute(f"PRAGMA table_info({table})")}
+            if column not in cols:
+                self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
         self.db.commit()
 
     def close(self) -> None:
@@ -129,18 +153,19 @@ class Store:
     # --- history ---------------------------------------------------------
     def record(self, *, trigger: str, personality: str, question: str, transcript: str | None,
                evaluation: dict[str, Any], interrupted: bool, level_before: int, level_after: int,
-               feedback: str, pip_issued: bool) -> int:
+               feedback: str, pip_issued: bool, barge_ins: int = 0) -> int:
         points = (evaluation["overall"] / PASS_POINTS_DIVISOR) if evaluation["passed"] else FAIL_POINTS
         if pip_issued:
             points += PIP_POINTS
         cur = self.db.execute(
             """INSERT INTO interrogations(ts, trigger, personality, question, transcript, word_count, jargon_ratio,
                overall, threshold, passed, evaluator, interrupted, level_before, level_after, scores_json,
-               jargon_json, feedback, points) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               jargon_json, feedback, points, barge_ins) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (time.time(), trigger, personality, question, transcript, evaluation["word_count"],
              evaluation["jargon_ratio"], evaluation["overall"], evaluation["threshold"], int(evaluation["passed"]),
              evaluation["evaluator"], int(interrupted), level_before, level_after,
-             json.dumps(evaluation["scores"]), json.dumps(evaluation["detected_jargon"]), feedback, points),
+             json.dumps(evaluation["scores"]), json.dumps(evaluation["detected_jargon"]), feedback, points,
+             barge_ins),
         )
         for term in set(evaluation["detected_jargon"]):
             self.db.execute("INSERT INTO buzzwords(term, count) VALUES(?, 1) "
@@ -152,19 +177,70 @@ class Store:
         self.db.commit()
         return int(cur.lastrowid or 0)
 
+    @staticmethod
+    def _row(r: sqlite3.Row) -> dict[str, Any]:
+        d = dict(r)
+        d["scores"] = json.loads(d.pop("scores_json"))
+        d["detected_jargon"] = json.loads(d.pop("jargon_json"))
+        d["passed"] = bool(d["passed"])
+        return d
+
     def history(self, limit: int = 20) -> list[dict[str, Any]]:
         rows = self.db.execute("SELECT * FROM interrogations ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
-        out = []
-        for r in rows:
-            d = dict(r)
-            d["scores"] = json.loads(d.pop("scores_json"))
-            d["detected_jargon"] = json.loads(d.pop("jargon_json"))
-            d["passed"] = bool(d["passed"])
-            out.append(d)
-        return out
+        return [self._row(r) for r in rows]
 
-    def points(self) -> float:
-        return float(self.db.execute("SELECT COALESCE(SUM(points), 0) FROM interrogations").fetchone()[0])
+    def between(self, start: float, end: float) -> list[dict[str, Any]]:
+        """Interrogations with start <= ts < end, oldest first."""
+        rows = self.db.execute("SELECT * FROM interrogations WHERE ts >= ? AND ts < ? ORDER BY ts",
+                               (start, end)).fetchall()
+        return [self._row(r) for r in rows]
+
+    def points(self, before: float | None = None) -> float:
+        if before is None:
+            return float(self.db.execute("SELECT COALESCE(SUM(points), 0) FROM interrogations").fetchone()[0])
+        return float(self.db.execute("SELECT COALESCE(SUM(points), 0) FROM interrogations WHERE ts < ?",
+                                     (before,)).fetchone()[0])
+
+    def pips_between(self, start: float, end: float) -> int:
+        return int(self.db.execute("SELECT COUNT(*) FROM pips WHERE ts >= ? AND ts < ?", (start, end)).fetchone()[0])
+
+    # --- weekly reviews --------------------------------------------------
+    def add_review(self, *, period_start: float, period_end: float, personality: str, rating: int,
+                   rating_name: str, summary: dict[str, Any], review: dict[str, Any], author: str,
+                   delivered: bool, trigger: str = "scheduled") -> int:
+        cur = self.db.execute(
+            """INSERT INTO reviews(ts, period_start, period_end, personality, rating, rating_name, summary_json,
+               review_json, author, trigger, delivered) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            (time.time(), period_start, period_end, personality, rating, rating_name, json.dumps(summary),
+             json.dumps(review), author, trigger, int(delivered)),
+        )
+        self.db.commit()
+        return int(cur.lastrowid or 0)
+
+    def mark_review_delivered(self, review_id: int) -> None:
+        self.db.execute("UPDATE reviews SET delivered = 1 WHERE id = ?", (review_id,))
+        self.db.commit()
+
+    @staticmethod
+    def _review_row(r: sqlite3.Row) -> dict[str, Any]:
+        d = dict(r)
+        d["summary"] = json.loads(d.pop("summary_json"))
+        d["review"] = json.loads(d.pop("review_json"))
+        d["delivered"] = bool(d["delivered"])
+        return d
+
+    def reviews(self, limit: int = 20) -> list[dict[str, Any]]:
+        rows = self.db.execute("SELECT * FROM reviews ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [self._review_row(r) for r in rows]
+
+    def review(self, review_id: int) -> dict[str, Any] | None:
+        row = self.db.execute("SELECT * FROM reviews WHERE id = ?", (review_id,)).fetchone()
+        return self._review_row(row) if row else None
+
+    def has_scheduled_review_for(self, period_start: float) -> bool:
+        """Manual reviews don't count: the Friday one still happens."""
+        return self.db.execute("SELECT 1 FROM reviews WHERE period_start = ? AND trigger = 'scheduled' LIMIT 1",
+                               (period_start,)).fetchone() is not None
 
     def stats(self) -> dict[str, Any]:
         agg = self.db.execute(

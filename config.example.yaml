@@ -18,6 +18,7 @@ llm:
   max_tokens_feedback: 140
   max_tokens_monologue: 380       # level 4 meltdown
   max_tokens_pip: 220
+  max_tokens_review: 520          # weekly performance review
   disable_thinking: true          # Qwen3-style <think> off; it's slow and nobody hears it
   json_mode: true
 
@@ -112,6 +113,13 @@ personality:
   default: random                 # or: passive_aggressive, big_four, disappointed_vp,
                                   #     scrum_master, linkedin, chief_synergy
   enabled: [passive_aggressive, big_four, disappointed_vp, scrum_master, linkedin, chief_synergy]
+
+review:                           # weekly performance review
+  enabled: true
+  weekday: 4                      # Friday
+  time: "16:55"                   # the traditional moment for bad news
+  personality: disappointed_vp    # or random
+  deliver_aloud: true             # false = file it silently (read it in the TUI or `middlemanagementd review`)
 
 storage:
   database_path: ~/.local/share/middlemanagementd/middlemanagementd.db

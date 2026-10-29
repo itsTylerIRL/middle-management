@@ -209,6 +209,8 @@ def cmd_status(cfg: Config, args: argparse.Namespace) -> int:
               else f"{audio['name']} since {datetime.fromtimestamp(audio['connected_at']):%H:%M:%S}")
     nxt = s["next_interrogation"]
     t.add_row("Next interrogation", nxt.replace("T", " ") if nxt else "[dim]not scheduled[/]")
+    if rv := s.get("next_review"):
+        t.add_row("Next performance review", rv.replace("T", " "))
     t.add_row("Escalation", f"level {s['escalation_level']}: {s['escalation_name']}")
     t.add_row("Rank", s["rank"])
     llm = s.get("llm_health", {})
@@ -262,6 +264,56 @@ def cmd_history(cfg: Config, args: argparse.Namespace) -> int:
         t.add_row(datetime.fromtimestamp(r["ts"]).strftime("%m-%d %H:%M"), r["personality"], f"{r['overall']:.0f}",
                   "[green]PASS[/]" if r["passed"] else "[red]FAIL[/]", f"{r['level_before']}→{r['level_after']}",
                   (r["transcript"] or "")[:60])
+    console.print(t)
+    return 0
+
+
+def cmd_review(cfg: Config, args: argparse.Namespace) -> int:
+    if args.now:
+        body: dict[str, Any] = {"aloud": not args.silent, "previous": args.last_week}
+        if args.personality:
+            body["personality"] = args.personality
+        res = api(cfg, "POST", "/api/review", body)
+        if not res.get("ok"):
+            console.print(f"[red]{res.get('message')}[/]")
+            return 1
+        console.print(f"[magenta]{res['message'].capitalize()}.[/] HR is preparing your file.")
+        since, deadline, review_id = res.get("seq", 0), time.time() + 900, None
+        try:
+            while review_id is None and time.time() < deadline:
+                for e in api(cfg, "GET", f"/api/events?since={since}"):
+                    since = e["seq"]
+                    if e["type"] == "review_ready":
+                        review_id = e["data"]["id"]
+                    elif e["type"] == "session_aborted":
+                        render_event(e)
+                        return 1
+                time.sleep(0.5)
+        except KeyboardInterrupt:
+            console.print("[dim]Stopped waiting (the review continues). Use `hush` to silence it.[/]")
+            return 0
+        if review_id is None:
+            console.print("[red]Timed out waiting for the review.[/]")
+            return 1
+        console.print(render.review(api(cfg, "GET", f"/api/reviews/{review_id}")))
+        return 0
+    if args.id is not None:
+        console.print(render.review(api(cfg, "GET", f"/api/reviews/{args.id}")))
+        return 0
+    rows = api(cfg, "GET", f"/api/reviews?limit={args.limit if args.list else 1}")
+    if not rows:
+        console.print("[dim]No reviews on file yet. `middlemanagementd review --now` requests one.[/]")
+        return 0
+    if not args.list:
+        console.print(render.review(rows[0]))
+        return 0
+    t = Table(title="Performance Reviews", title_style="bold magenta")
+    for col in ("#", "Week of", "Reviewer", "Rating", "Headline"):
+        t.add_column(col)
+    for r in rows:
+        t.add_row(str(r["id"]), r["summary"]["week_of"], render.manager_title(r["personality"]),
+                  f"[{render.rating_style(r['rating'])}]{render.stars(r['rating'])}[/] {r['rating_name']}",
+                  r["review"]["headline"][:70])
     console.print(t)
     return 0
 
@@ -507,6 +559,15 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("history", help="recent interrogations")
     s.add_argument("--limit", "-n", type=int, default=15)
     s.set_defaults(func=cmd_history)
+    s = sub.add_parser("review", help="weekly performance review: show the latest, list them, or request one")
+    s.add_argument("--now", action="store_true", help="hold a review now (this week so far)")
+    s.add_argument("--last-week", action="store_true", help="with --now: review last week instead")
+    s.add_argument("--silent", action="store_true", help="with --now: file it without reading it aloud")
+    s.add_argument("--personality", "-p")
+    s.add_argument("--list", action="store_true", help="list past reviews")
+    s.add_argument("--id", type=int, help="show one review")
+    s.add_argument("--limit", "-n", type=int, default=15)
+    s.set_defaults(func=cmd_review)
     s = sub.add_parser("config", help="show effective config")
     s.add_argument("--init", action="store_true", help="write ~/.config/middlemanagementd/config.yaml")
     s.set_defaults(func=cmd_config)

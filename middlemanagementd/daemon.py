@@ -35,7 +35,9 @@ from .escalation import LEVEL_NAMES
 from .evaluator import JargonEvaluator
 from .llm import LLMClient
 from .logs import event
+from .personalities import PERSONALITIES
 from .reputation import Store, rank_for
+from .review import ReviewWriter, next_due, period, week_start
 from .scheduler import Scheduler
 from .session import InterrogationRunner
 
@@ -152,6 +154,7 @@ class Daemon:
         self.llm = LLMClient(cfg.llm)
         self.evaluator = JargonEvaluator(cfg.evaluation, self.llm, cfg.llm.max_tokens_eval, cfg.llm.eval_temperature)
         self.runner = InterrogationRunner(cfg, self.store, self.llm, self.evaluator, self.rng, emit=self._emit)
+        self.reviewer = ReviewWriter(cfg, self.store, self.llm, self.rng, emit=self._emit)
         self.scheduler = Scheduler(cfg.scheduler, self.rng)
         self.hub = AudioHub()
         self.local_audio = audio
@@ -162,6 +165,7 @@ class Daemon:
         self.wake = asyncio.Event()
         self.shutdown_event = asyncio.Event()
         self.next_fire_at: datetime | None = None
+        self.next_review_at: datetime | None = None
         self.started_at = time.time()
         if cfg.scheduler.start_paused and self.store.get("paused") is None:
             self.store.set("paused", True)
@@ -198,6 +202,8 @@ class Daemon:
             "busy": self.busy,
             "scheduler_enabled": self.cfg.scheduler.enabled,
             "next_interrogation": self.next_fire_at.isoformat(timespec="seconds") if self.next_fire_at else None,
+            "next_review": (self.next_review_at.isoformat(timespec="seconds")
+                            if self.next_review_at and self.cfg.review.enabled else None),
             "audio": ("local" if self.local_audio is not None else
                       {"name": client.name, "connected_at": client.connected_at} if self.hub.connected and client
                       else None),
@@ -216,23 +222,40 @@ class Daemon:
             return False, "an evaluation is already in progress"
         if not self.audio_ready:
             return False, "no audio client connected"
-        self.session_task = asyncio.create_task(self._run_session(trigger, personality))
+        self.session_task = asyncio.create_task(
+            self._guarded(self.runner.run(self.audio, trigger=trigger, personality=personality), "interrogation"))
         return True, "interrogation started"
 
-    async def _run_session(self, trigger: str, personality: str | None) -> None:
+    def request_review(self, *, personality: str | None = None, aloud: bool = True, previous: bool = False,
+                       trigger: str = "manual") -> tuple[bool, str]:
+        """Weekly performance review. Read aloud when possible, otherwise filed silently."""
+        if personality and personality != "random" and personality not in PERSONALITIES:
+            return False, f"unknown personality {personality!r}"
+        if self.busy:
+            return False, "an evaluation is already in progress"
+        reason = ("kill switch engaged" if self.killed else "no audio client connected" if not self.audio_ready
+                  else "" if aloud else "requested silently")
+        start, end = period(datetime.now(), previous)
+        self.session_task = asyncio.create_task(self._guarded(self.reviewer.run(
+            None if reason else self.audio, start=start, end=end, personality=personality, trigger=trigger),
+            "review"))
+        return True, "weekly review in progress" + (f"; it will be filed silently ({reason})" if reason else "")
+
+    async def _guarded(self, work: Any, what: str) -> None:
+        """Run one session (interrogation or review) so that it can fail or be killed without taking the daemon down."""
         try:
-            await self.runner.run(self.audio, trigger=trigger, personality=personality)
+            await work
         except asyncio.CancelledError:
-            self._emit("session_aborted", {"reason": "killed"})
+            self._emit("session_aborted", {"what": what, "reason": "killed"})
             with contextlib.suppress(Exception):
                 await self.audio.stop()
             raise
         except AudioError as e:
-            event(log, "interrogation aborted", logging.WARNING, error=str(e))
-            self._emit("session_aborted", {"reason": str(e)})
+            event(log, f"{what} aborted", logging.WARNING, error=str(e))
+            self._emit("session_aborted", {"what": what, "reason": str(e)})
         except Exception as e:  # noqa: BLE001 - one bad session must not kill the daemon
-            log.exception("interrogation crashed")
-            self._emit("session_aborted", {"reason": f"internal error: {e!r}"})
+            log.exception("%s crashed", what)
+            self._emit("session_aborted", {"what": what, "reason": f"internal error: {e!r}"})
             with contextlib.suppress(Exception):
                 await self.audio.stop()
         finally:
@@ -298,6 +321,31 @@ class Daemon:
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await asyncio.shield(self.session_task)
 
+    async def review_loop(self) -> None:
+        cfg = self.cfg.review
+        while cfg.enabled and not self.shutdown_event.is_set():
+            now = datetime.now()
+            start = week_start(now).timestamp()
+            due = next_due(now, cfg, self.store.has_scheduled_review_for(start))
+            self.next_review_at = due
+            if due > now:
+                # Wake at least hourly: the machine may have slept or the clock moved.
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(self.shutdown_event.wait(), min(3600.0, (due - now).total_seconds()))
+                continue
+            if self.busy:
+                await asyncio.sleep(30)  # HR waits for the current interrogation to finish
+                continue
+            # Never ambush: aloud only when an interrogation would be allowed right now.
+            aloud = cfg.deliver_aloud and not self.paused and self.scheduler.is_allowed(now)
+            ok, msg = self.request_review(aloud=aloud, trigger="scheduled")
+            event(log, "scheduled weekly review", ok=ok, message=msg)
+            if self.session_task is not None:
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await asyncio.shield(self.session_task)
+            if not self.store.has_scheduled_review_for(start):
+                await asyncio.sleep(600)  # killed or failed; try again later
+
     # --- HTTP --------------------------------------------------------------
     def _token(self) -> str:
         return os.environ.get(self.cfg.server.token_env, "")
@@ -325,6 +373,9 @@ class Daemon:
         r.add_get("/api/stats", self.h_stats)
         r.add_get("/api/history", self.h_history)
         r.add_get("/api/events", self.h_events)
+        r.add_get("/api/reviews", self.h_reviews)
+        r.add_get("/api/reviews/{id:\\d+}", self.h_review_get)
+        r.add_post("/api/review", self.h_review)
         r.add_get("/api/config", self.h_config)
         r.add_get("/ws/audio", self.h_ws_audio)
         return app
@@ -367,6 +418,23 @@ class Daemon:
     async def h_history(self, request: web.Request) -> web.Response:
         limit = max(1, min(200, int(request.query.get("limit", "20"))))
         return web.json_response(self.store.history(limit))
+
+    async def h_reviews(self, request: web.Request) -> web.Response:
+        limit = max(1, min(200, int(request.query.get("limit", "20"))))
+        return web.json_response(self.store.reviews(limit))
+
+    async def h_review_get(self, request: web.Request) -> web.Response:
+        review = self.store.review(int(request.match_info["id"]))
+        if review is None:
+            return web.json_response({"error": "no such review"}, status=404)
+        return web.json_response(review)
+
+    async def h_review(self, request: web.Request) -> web.Response:
+        body = await request.json() if request.can_read_body else {}
+        ok, msg = self.request_review(personality=body.get("personality"), aloud=bool(body.get("aloud", True)),
+                                      previous=bool(body.get("previous", False)))
+        return web.json_response({"ok": ok, "message": msg, "seq": self.events[-1]["seq"] if self.events else 0},
+                                 status=200 if ok else 409)
 
     async def h_events(self, request: web.Request) -> web.Response:
         since = int(request.query.get("since", "0"))
@@ -427,16 +495,20 @@ class Daemon:
                 loop.add_signal_handler(sig, self.shutdown_event.set)
 
         sched = asyncio.create_task(self.scheduler_loop())
+        reviews = asyncio.create_task(self.review_loop())
         try:
             await self.shutdown_event.wait()
         finally:
             event(log, "shutting down")
             sched.cancel()
+            reviews.cancel()
             with contextlib.suppress(Exception):
                 await self.audio.stop()
             await self.abort_session()
             with contextlib.suppress(asyncio.CancelledError):
                 await sched
+            with contextlib.suppress(asyncio.CancelledError):
+                await reviews
             await runner.cleanup()
             await self.llm.close()
             self.store.close()

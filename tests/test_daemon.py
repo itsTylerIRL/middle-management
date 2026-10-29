@@ -1,6 +1,7 @@
 """Daemon + real AudioClient over a real WebSocket, with a fake audio engine."""
 
 import asyncio
+from datetime import datetime
 
 import aiohttp
 from aiohttp.test_utils import TestServer
@@ -146,3 +147,61 @@ async def test_token_auth(cfg, monkeypatch):
                 assert r.status == 200
     finally:
         await server.close()
+
+
+async def test_review_read_aloud_over_websocket(cfg):
+    engine = FakeEngine()
+    daemon, server, client, task = await start(cfg, engine)
+    try:
+        async with aiohttp.ClientSession() as http:
+            async with http.post(server.make_url("/api/review"), json={"personality": "scrum_master"}) as r:
+                body = await r.json()
+                assert body["ok"] and "silently" not in body["message"]
+            await asyncio.wait_for(daemon.session_task, 10)
+            async with http.get(server.make_url("/api/reviews")) as r:
+                reviews = await r.json()
+            assert len(reviews) == 1 and reviews[0]["delivered"] and reviews[0]["personality"] == "scrum_master"
+            assert reviews[0]["author"] == "template"  # LLM disabled in these tests
+            async with http.get(server.make_url(f"/api/reviews/{reviews[0]['id']}")) as r:
+                assert (await r.json())["rating_name"] == reviews[0]["rating_name"]
+            async with http.get(server.make_url("/api/reviews/999")) as r:
+                assert r.status == 404
+        assert any("weekly performance review" in s for s in engine.said)
+        assert [e["type"] for e in daemon.events][-1] == "review_ready"
+    finally:
+        await stop(server, client, task)
+
+
+async def test_review_filed_silently_without_audio_or_when_killed(cfg):
+    cfg.llm.enabled = False
+    daemon = Daemon(cfg)
+    ok, msg = daemon.request_review()
+    assert ok and "no audio client" in msg
+    await asyncio.wait_for(daemon.session_task, 5)
+    daemon.store.set("killswitch", True)
+    ok, msg = daemon.request_review(previous=True)
+    assert ok and "kill switch" in msg
+    await asyncio.wait_for(daemon.session_task, 5)
+    reviews = daemon.store.reviews()
+    assert len(reviews) == 2 and not any(r["delivered"] for r in reviews)
+    assert not daemon.request_review(personality="ceo")[0]
+
+
+async def test_overdue_scheduled_review_runs_once(cfg):
+    cfg.llm.enabled = False
+    cfg.review.weekday = 0
+    cfg.review.time = "00:00"  # always overdue
+    daemon = Daemon(cfg)
+    loop = asyncio.create_task(daemon.review_loop())
+    try:
+        for _ in range(200):
+            if daemon.store.reviews():
+                break
+            await asyncio.sleep(0.02)
+        await asyncio.sleep(0.1)
+        reviews = daemon.store.reviews()
+        assert len(reviews) == 1 and reviews[0]["trigger"] == "scheduled"
+        assert daemon.next_review_at is not None and daemon.next_review_at > datetime.now()
+        assert daemon.status()["next_review"]
+    finally:
+        loop.cancel()

@@ -39,7 +39,8 @@ For a single machine, `middlemanagementd serve --local-audio` runs the same engi
 | `evaluator.py` | LLM scoring blended with rules (`llm_weight`); falls back to rules alone |
 | `prompts.py` | Evaluator and character prompts (see `docs/evaluation-prompts.md`) |
 | `escalation.py` | Levels 0–5, interruption policy, PIP rules, fallback lines |
-| `reputation.py` | SQLite: history, buzzword counts, PIPs, persisted state (level, pause, kill switch), ranks |
+| `review.py` | Weekly performance review: period summary, code-decided rating, LLM/template write-up, delivery |
+| `reputation.py` | SQLite: history, buzzword counts, PIPs, reviews, persisted state (level, pause, kill switch), ranks; adds new columns to old databases |
 | `llm.py` | OpenAI-compatible client: timeouts, retries with backoff, SSE streaming, sentence splitter |
 | `audio/port.py` | `AudioPort` protocol + Local / Console / Mock adapters |
 | `audio/engine.py` | The real thing: chime, hold music, say (with barge-in), listen (VAD → STT) |
@@ -63,6 +64,15 @@ For a single machine, `middlemanagementd serve --local-audio` runs the same engi
    soon as it is complete, while later ones are still generating. The level-4 meltdown is capped at
    `monologue_max_seconds`.
 7. The result is persisted, and a rank change is announced.
+
+## Weekly review flow
+
+`Daemon.review_loop` sleeps until this week's slot (waking at least hourly in case the machine slept). It then
+waits for any interrogation in progress and runs `ReviewWriter.run` in the same session slot, so the kill switch
+and `hush` cancel a review exactly like an interrogation. The audio port is passed only when delivery is allowed;
+otherwise the review is written and filed silently. A week counts as done once a *scheduled* review is stored.
+Manual reviews (`POST /api/review`) don't count. Events: `review_started`, `review_ready`. API:
+`GET /api/reviews`, `GET /api/reviews/{id}`, `POST /api/review {personality?, aloud?, previous?}`.
 
 ## Silencing (the daemon must never become impossible to silence)
 

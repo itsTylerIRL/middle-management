@@ -13,8 +13,8 @@ from rich.table import Table
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.widgets import DataTable, Footer, Header, RichLog, Static
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.widgets import DataTable, Footer, Header, RichLog, Static, TabbedContent, TabPane
 
 from . import render
 from .config import Config
@@ -27,6 +27,9 @@ ApiCall = Callable[[str, str, dict[str, Any] | None], Any]
 
 MANAGERS: list[str | None] = [None, *PERSONALITIES]
 FEED_BACKLOG = 40
+HISTORY_LIMIT = 100
+DASHBOARD_HISTORY = 25
+SPARKS = "▁▂▃▄▅▆▇█"
 
 
 def _ago(target: datetime) -> str:
@@ -70,6 +73,9 @@ def status_renderable(s: dict[str, Any] | None, error: str | None, manager: str 
     t.add_row("LLM", f"{llm_state} [dim]{(s.get('llm_endpoint') or 'disabled').removeprefix('http://')}[/]")
     who = PERSONALITIES[manager].title if manager else "Random"
     t.add_row("Manager", f"[cyan]{who}[/] [dim](m to change)[/]")
+    if rv := s.get("next_review"):
+        when = datetime.fromisoformat(rv)
+        t.add_row("Review", f"{when:%a %H:%M} [dim]({_ago(when)})[/]")
     up = s["uptime_seconds"]
     t.add_row("Uptime", f"[dim]{up // 3600}h {up % 3600 // 60}m · v{s['version']}[/]")
     return t
@@ -87,7 +93,17 @@ def escalation_renderable(level: int) -> RenderableType:
     return t
 
 
-def reputation_renderable(s: dict[str, Any]) -> RenderableType:
+def trend_renderable(history: list[dict[str, Any]], width: int = 24) -> Text:
+    """Recent overall scores, oldest first, as a sparkline: green passes, red failures."""
+    recent = list(reversed(history[:width]))
+    text = Text()
+    for r in recent:
+        level = min(len(SPARKS) - 1, int(max(0.0, r["overall"]) / 100 * len(SPARKS)))
+        text.append(SPARKS[level], style="green" if r["passed"] else "red")
+    return text
+
+
+def reputation_renderable(s: dict[str, Any], history: list[dict[str, Any]] | None = None) -> RenderableType:
     rank_no, points = s["rank_number"], s["synergy_points"]
     lo = RANKS[rank_no - 1][0]
     hi = RANKS[rank_no][0] if rank_no < len(RANKS) else None
@@ -107,6 +123,8 @@ def reputation_renderable(s: dict[str, Any]) -> RenderableType:
     g.add_row("Reports", f"[green]{s['successful_reports']} passed[/] · [red]{s['failed_evaluations']} failed[/]")
     g.add_row("Streak", f"{s['consecutive_successes']} [dim](best {s['best_streak']})[/]")
     g.add_row("Avg score", f"{s['average_score']} [dim]· {s['average_jargon_density'] * 100:.0f}% jargon[/]")
+    if history:
+        g.add_row("Trend", trend_renderable(history))
     g.add_row("Longest win", f"{s['longest_successful_monologue_words']} words")
     g.add_row("PIPs", str(s["pips_issued"]))
     g.add_row("Talked over", f"{s.get('times_talked_over_management', 0)}× [dim]management[/]")
@@ -133,7 +151,8 @@ class ManagementConsole(App[None]):
     SUB_TITLE = "Corporate Alignment Enforcement Console"
 
     CSS = """
-    Screen { layout: horizontal; }
+    TabPane { padding: 0; }
+    #dash { height: 1fr; }
     #side { width: 44; }
     #main { width: 1fr; }
     .panel { border: round $primary-darken-1; padding: 0 1; height: auto; }
@@ -143,10 +162,13 @@ class ManagementConsole(App[None]):
     #review { height: auto; max-height: 16; border: round magenta; }
     #history { height: 12; border: round $primary-darken-1; }
     #buzzwords { height: 1fr; }
+    .list { width: 62; height: 1fr; border: round $primary-darken-1; }
+    .doc { width: 1fr; height: 1fr; border: round magenta; padding: 0 1; }
     """
 
     BINDINGS = [
         Binding("t", "trigger", "Interrogate me"),
+        Binding("w", "review", "Weekly review"),
         Binding("m", "cycle_manager", "Manager"),
         Binding("p", "toggle_pause", "Pause/Resume"),
         Binding("k", "kill", "KILL", priority=True),
@@ -154,6 +176,9 @@ class ManagementConsole(App[None]):
         Binding("h", "hush", "Hush"),
         Binding("s", "start", "Start daemon"),
         Binding("q", "quit", "Quit"),
+        Binding("1", "tab('dashboard')", "Dashboard", show=False),
+        Binding("2", "tab('history')", "History", show=False),
+        Binding("3", "tab('reviews')", "Reviews", show=False),
     ]
 
     def __init__(self, api: ApiCall, *, start: Callable[[], list[str]] | None = None,
@@ -168,29 +193,47 @@ class ManagementConsole(App[None]):
         self.seq: int | None = None
         self.manager_idx = 0
         self._polling = False
+        self.history: list[dict[str, Any]] = []
+        self.reviews: list[dict[str, Any]] = []
 
     # --- layout ------------------------------------------------------------
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        with Vertical(id="side"):
-            yield Static(id="status", classes="panel")
-            yield Static(id="escalation", classes="panel")
-            yield Static(id="reputation", classes="panel")
-            yield Static(id="buzzwords", classes="panel")
-        with Vertical(id="main"):
-            yield RichLog(id="feed", wrap=True, markup=True, highlight=False, min_width=40)
-            yield Static(Text.from_markup("[dim]No evaluations yet. Press [bold]t[/] to be interrogated.[/]"),
-                         id="review", classes="panel")
-            yield DataTable(id="history", cursor_type="row", zebra_stripes=True)
+        with TabbedContent(id="tabs", initial="dashboard"):
+            with TabPane("Dashboard [dim]1[/]", id="dashboard"), Horizontal(id="dash"):
+                with Vertical(id="side"):
+                    yield Static(id="status", classes="panel")
+                    yield Static(id="escalation", classes="panel")
+                    yield Static(id="reputation", classes="panel")
+                    yield Static(id="buzzwords", classes="panel")
+                with Vertical(id="main"):
+                    yield RichLog(id="feed", wrap=True, markup=True, highlight=False, min_width=40)
+                    yield Static(Text.from_markup("[dim]No evaluations yet. Press [bold]t[/] to be interrogated.[/]"),
+                                 id="review", classes="panel")
+                    yield DataTable(id="history", cursor_type="row", zebra_stripes=True)
+            with TabPane("History [dim]2[/]", id="history-tab"), Horizontal():
+                yield DataTable(id="history-full", cursor_type="row", zebra_stripes=True, classes="list")
+                with VerticalScroll(id="detail-scroll", classes="doc"):
+                    yield Static(Text.from_markup("[dim]No interrogations on file.[/]"), id="detail")
+            with TabPane("Reviews [dim]3[/]", id="reviews-tab"), Horizontal():
+                yield DataTable(id="reviews", cursor_type="row", zebra_stripes=True, classes="list")
+                with VerticalScroll(id="review-scroll", classes="doc"):
+                    yield Static(Text.from_markup(
+                        "[dim]No performance reviews on file. Press [bold]w[/] to request one, or wait for "
+                        "Friday afternoon.[/]"), id="review-doc")
         yield Footer()
 
     def on_mount(self) -> None:
         titles = {"status": "Status", "escalation": "Escalation", "reputation": "Corporate Reputation",
                   "buzzwords": "Most Leveraged Buzzwords", "feed": "Live Interrogation",
-                  "review": "Last Performance Review", "history": "History"}
+                  "review": "Last Evaluation", "history": "History [dim](enter for details)[/]",
+                  "history-full": "Interrogations", "detail-scroll": "Details",
+                  "reviews": "Weekly Performance Reviews", "review-scroll": "Review"}
         for wid, title in titles.items():
             self.query_one(f"#{wid}").border_title = title
         self.query_one("#history", DataTable).add_columns("When", "Manager", "Score", "Result", "Level", "Said")
+        self.query_one("#history-full", DataTable).add_columns("When", "Manager", "Score", "Result", "Level")
+        self.query_one("#reviews", DataTable).add_columns("Week of", "Rating", "Reviewer")
         self.query_one("#escalation", Static).update(escalation_renderable(0))
         self.call_after_refresh(self.refresh_all)
         self.set_interval(self.poll_seconds, self.poll_events)
@@ -209,6 +252,7 @@ class ManagementConsole(App[None]):
     async def refresh_all(self) -> None:
         await self.refresh_status(check_llm=True)
         await self.refresh_reputation()
+        await self.refresh_reviews()
 
     async def refresh_llm(self) -> None:
         await self.refresh_status(check_llm=True)
@@ -225,6 +269,7 @@ class ManagementConsole(App[None]):
             if was_offline:
                 self.sub_title = "Corporate Alignment Enforcement Console"
                 await self.refresh_reputation()
+                await self.refresh_reviews()
         except ApiError as e:
             self.status, self.offline_reason = None, str(e)
             self.sub_title = "daemon offline"
@@ -237,23 +282,81 @@ class ManagementConsole(App[None]):
 
         try:
             stats = await self.call("GET", "/api/stats")
-            history = await self.call("GET", "/api/history?limit=25")
+            history = await self.call("GET", f"/api/history?limit={HISTORY_LIMIT}")
         except ApiError:
             return
-        self.query_one("#reputation", Static).update(reputation_renderable(stats))
+        self.history = history
+        self.query_one("#reputation", Static).update(reputation_renderable(stats, history))
         self.query_one("#buzzwords", Static).update(buzzwords_renderable(stats["top_buzzwords"]))
         self.query_one("#escalation", Static).update(escalation_renderable(stats["escalation_level"]))
         table = self.query_one("#history", DataTable)
+        full = self.query_one("#history-full", DataTable)
+        keep = full.cursor_row
         table.clear()
-        for r in history:
-            table.add_row(
+        full.clear()
+        for i, r in enumerate(history):
+            cells = (
                 datetime.fromtimestamp(r["ts"]).strftime("%m-%d %H:%M"),
-                PERSONALITIES[r["personality"]].title if r["personality"] in PERSONALITIES else r["personality"],
+                render.manager_title(r["personality"]),
                 f"{r['overall']:.0f}",
                 Text("PASS", style="bold green") if r["passed"] else Text("FAIL", style="bold red"),
                 f"{r['level_before']}→{r['level_after']}",
-                (r["transcript"] or "")[:80],
             )
+            if i < DASHBOARD_HISTORY:
+                table.add_row(*cells, (r["transcript"] or "")[:80], key=str(r["id"]))
+            full.add_row(*cells, key=str(r["id"]))
+        if history:
+            full.move_cursor(row=min(keep, len(history) - 1))
+            self.show_interrogation(full.cursor_row)
+
+    async def refresh_reviews(self) -> None:
+        from .cli import ApiError
+
+        try:
+            reviews = await self.call("GET", "/api/reviews?limit=52")
+        except ApiError:
+            return
+        self.reviews = reviews
+        table = self.query_one("#reviews", DataTable)
+        keep = table.cursor_row
+        table.clear()
+        for r in reviews:
+            table.add_row(r["summary"]["week_of"].split(" ", 1)[1] if " " in r["summary"]["week_of"]
+                          else r["summary"]["week_of"],
+                          Text(render.stars(r["rating"]), style=render.rating_style(r["rating"])),
+                          render.manager_title(r["personality"]), key=str(r["id"]))
+        if reviews:
+            table.move_cursor(row=min(keep, len(reviews) - 1))
+            self.show_review(table.cursor_row)
+
+    def show_interrogation(self, row: int) -> None:
+        if 0 <= row < len(self.history):
+            self.query_one("#detail", Static).update(render.interrogation(self.history[row]))
+
+    def show_review(self, row: int) -> None:
+        if 0 <= row < len(self.reviews):
+            self.query_one("#review-doc", Static).update(render.review(self.reviews[row]))
+
+    def on_data_table_row_highlighted(self, message: DataTable.RowHighlighted) -> None:
+        if message.data_table.id == "history-full":
+            self.show_interrogation(message.cursor_row)
+        elif message.data_table.id == "reviews":
+            self.show_review(message.cursor_row)
+
+    def on_data_table_row_selected(self, message: DataTable.RowSelected) -> None:
+        if message.data_table.id == "history":
+            # Dashboard row -> the same interrogation in the History tab.
+            self.action_tab("history")
+            full = self.query_one("#history-full", DataTable)
+            full.move_cursor(row=message.cursor_row)
+            self.show_interrogation(message.cursor_row)
+
+    def action_tab(self, tab: str) -> None:
+        pane, focus = {"dashboard": ("dashboard", "#history"), "history": ("history-tab", "#history-full"),
+                       "reviews": ("reviews-tab", "#reviews")}[tab]
+        self.query_one("#tabs", TabbedContent).active = pane
+        # Focus must follow, or Textual switches back to the tab that still holds it.
+        self.query_one(focus).focus()
 
     async def poll_events(self) -> None:
         from .cli import ApiError
@@ -273,6 +376,8 @@ class ManagementConsole(App[None]):
                               for e in events):
                 await self.refresh_reputation()
                 await self.refresh_status()
+            if any(e["type"] == "review_ready" for e in events):
+                await self.refresh_reviews()
         except ApiError:
             pass
         finally:
@@ -284,12 +389,16 @@ class ManagementConsole(App[None]):
             review = self.query_one("#review", Static)
             review.update(Group(render.score_table(e["data"]["scores"], width=24), Text(),
                                 render.evaluation_summary(e["data"])))
-            review.border_title = f"Last Performance Review · {datetime.fromtimestamp(e['ts']):%H:%M}"
+            review.border_title = f"Last Evaluation · {datetime.fromtimestamp(e['ts']):%H:%M}"
             if (r := render.event(e, include_evaluation=False)) is not None:
                 feed.write(r)
             return
         if e["type"] == "session_started":
             self.notify(f"{e['data']['personality']} would like a quick word.", title="Interrogation", timeout=6)
+        elif e["type"] == "review_ready":
+            d = e["data"]
+            self.notify(f"{d['rating_name']}. Press 3 to read it.", title="Performance review filed", timeout=10,
+                        severity="information" if d["rating"] >= 3 else "warning")
         if (r := render.event(e)) is not None:
             feed.write(r)
 
@@ -310,6 +419,9 @@ class ManagementConsole(App[None]):
 
     async def action_trigger(self) -> None:
         await self._post("/api/trigger", {"personality": self.manager} if self.manager else {})
+
+    async def action_review(self) -> None:
+        await self._post("/api/review", {"personality": self.manager} if self.manager else {})
 
     async def action_cycle_manager(self) -> None:
         self.manager_idx = (self.manager_idx + 1) % len(MANAGERS)

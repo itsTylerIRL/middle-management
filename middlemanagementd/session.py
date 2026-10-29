@@ -150,7 +150,7 @@ class InterrogationRunner:
             trigger=trigger, personality=persona.key, question=question,
             transcript=transcript if self.cfg.storage.store_transcripts else None,
             evaluation=evaluation.to_dict(), interrupted=result.interrupted, level_before=level_before,
-            level_after=level_after, feedback=feedback, pip_issued=pip_issued,
+            level_after=level_after, feedback=feedback, pip_issued=pip_issued, barge_ins=barge_ins,
         )
         _, rank_after = rank_for(self.store.points())
         if rank_after != rank_before:

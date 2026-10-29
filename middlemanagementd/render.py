@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from datetime import datetime
+
 from rich.console import Group, RenderableType
 from rich.panel import Panel
 from rich.rule import Rule
@@ -11,6 +13,7 @@ from rich.table import Table
 from rich.text import Text
 
 from .escalation import LEVEL_NAMES
+from .personalities import PERSONALITIES
 from .scoring import METRICS
 
 
@@ -82,7 +85,13 @@ def event(e: dict[str, Any], *, include_evaluation: bool = True) -> RenderableTy
     if t == "rank_change":
         return Text.from_markup(f"[bold]Title change:[/] {d['from']} → [bold green]{d['to']}[/]")
     if t == "session_aborted":
-        return Text.from_markup(f"[red]Interrogation aborted:[/] {d['reason']}")
+        return Text.from_markup(f"[red]{d.get('what', 'interrogation').capitalize()} aborted:[/] {d['reason']}")
+    if t == "review_started":
+        how = "" if d["aloud"] else " [dim](filed silently)[/]"
+        return Rule(f"[bold yellow]Weekly performance review with {d['personality']}[/]{how}")
+    if t == "review_ready":
+        style = rating_style(d["rating"])
+        return Text.from_markup(f"[bold]Review filed:[/] [{style}]{d['rating_name']}[/]. [italic]{d['headline']}[/]")
     if t == "session_finished":
         return Text.from_markup(f"[dim]Finished in {d['duration_seconds']}s. Rank: {d['rank_after']}[/]")
     if t == "killswitch":
@@ -123,3 +132,90 @@ def stats_tables(s: dict[str, Any]) -> list[Table]:
             b.add_row(term, str(n))
         tables.append(b)
     return tables
+
+
+def rating_style(rating: int) -> str:
+    return {5: "bold green", 4: "green", 3: "yellow", 2: "red", 1: "bold red"}.get(rating, "dim")
+
+
+def stars(rating: int) -> str:
+    return "★" * rating + "☆" * (5 - rating)
+
+
+def manager_title(key: str) -> str:
+    return PERSONALITIES[key].title if key in PERSONALITIES else key
+
+
+def review(r: dict[str, Any]) -> RenderableType:
+    """A filed weekly performance review, as an HR document."""
+    rv, sm = r["review"], r["summary"]
+    style = rating_style(r["rating"])
+    head = Table.grid(padding=(0, 2))
+    head.add_column(style="dim")
+    head.add_column()
+    head.add_row("Week of", sm["week_of"])
+    head.add_row("Reviewer", manager_title(r["personality"]))
+    head.add_row("Rating", f"[{style}]{stars(r['rating'])}  {r['rating_name']}[/]")
+    head.add_row("Filed", datetime.fromtimestamp(r["ts"]).strftime("%a %d %b %H:%M")
+                 + ("" if r["delivered"] else " [dim](not read aloud)[/]")
+                 + (" [dim]· HR template[/]" if r["author"] == "template" else ""))
+    parts: list[RenderableType] = [head, Text(), Text.from_markup(f"[bold italic]{rv['headline']}[/]")]
+    for title, key, bullet in (("Key strengths", "strengths", "[green]+[/]"),
+                               ("Areas for development", "development_areas", "[red]-[/]"),
+                               ("Objectives for next week", "objectives", "[cyan]→[/]")):
+        parts.append(Text.from_markup(f"\n[bold magenta]{title}[/]"))
+        parts.extend(Text.from_markup(f"{bullet} {line}") for line in rv[key])
+    parts.append(Text.from_markup(f"\n[italic]{rv['closing']}[/]"))
+    parts.append(Text())
+    parts.append(review_facts(sm))
+    return Group(*parts)
+
+
+def review_facts(sm: dict[str, Any]) -> RenderableType:
+    t = Table(title="Calibration data", title_style="dim", show_header=False, box=None, padding=(0, 2))
+    t.add_column(style="dim")
+    t.add_column()
+    n = sm["interrogations"]
+    t.add_row("Interrogations", str(n) + (f" ([green]{sm['passed']} passed[/], [red]{sm['failed']} failed[/])"
+                                          if n else ""))
+    if n:
+        prev = sm.get("previous_week_average")
+        delta = "" if prev is None else f" [dim](last week {prev:g})[/]"
+        t.add_row("Average score", f"{sm['average_score']:g}{delta}")
+        t.add_row("Best / worst", f"{sm['best_score']:g} / {sm['worst_score']:g}")
+        t.add_row("Escalation", f"{sm['escalation_start']} → {sm['escalation_end']} (peak {sm['highest_escalation']})")
+        if sm.get("top_buzzwords"):
+            t.add_row("Top buzzwords", ", ".join(f"{w} ×{c}" for w, c in sm["top_buzzwords"]))
+        t.add_row("Cut off / talked over", f"{sm['times_cut_off']} / {sm['times_talked_over_management']}")
+    t.add_row("PIPs issued", str(sm["pips_issued"]))
+    t.add_row("Synergy points", f"{sm['synergy_points_change']:+g}")
+    rank = sm["rank_at_end"] if sm["rank_at_start"] == sm["rank_at_end"] else f"{sm['rank_at_start']} → {sm['rank_at_end']}"
+    t.add_row("Rank", rank)
+    return t
+
+
+def interrogation(r: dict[str, Any]) -> RenderableType:
+    """One stored interrogation in full."""
+    head = Table.grid(padding=(0, 2))
+    head.add_column(style="dim")
+    head.add_column()
+    head.add_row("When", datetime.fromtimestamp(r["ts"]).strftime("%a %d %b %H:%M") + f" [dim]({r['trigger']})[/]")
+    head.add_row("Manager", manager_title(r["personality"]))
+    head.add_row("Escalation", f"{r['level_before']} → {r['level_after']} "
+                               f"[dim]({LEVEL_NAMES.get(r['level_after'], '')})[/]")
+    extras = [x for x in ("cut off" if r.get("interrupted") else "",
+                          f"talked over management ×{r['barge_ins']}" if r.get("barge_ins") else "") if x]
+    if extras:
+        head.add_row("Notes", ", ".join(extras))
+    transcript = r.get("transcript")
+    ev = {**r, "critique": "", "llm_error": None}
+    return Group(
+        head,
+        Panel(Text(r["question"]), title="Question", border_style="cyan"),
+        Panel(Text(transcript) if transcript else Text.from_markup("[dim](silence, or transcripts not stored)[/]"),
+              title="Your status update", border_style="blue"),
+        Panel(score_table(r["scores"], width=24), title="Performance Review", border_style="magenta"),
+        evaluation_summary(ev),
+        Panel(Text(r.get("feedback") or ""), title="Manager feedback",
+              border_style=level_style(r["level_after"])),
+    )

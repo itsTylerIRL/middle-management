@@ -41,6 +41,7 @@ answers (`--speak` to hear the manager anyway). `middlemanagementd evaluate "you
 | **`tui`** | **Full-screen management console** (see below) |
 | `status` | State, audio client, next interrogation, escalation level, rank, LLM health |
 | `stats` / `history` | Corporate reputation and recent interrogations |
+| `review [--now [--last-week] [--silent] [-p P]] [--list] [--id N]` | Weekly performance review: show the latest, list them, or hold one now |
 | `config [--init]` | Show the effective config / write a starter config |
 | `test-audio [--only chime hold tts mic barge]` | Device check on this machine; `barge` tunes talk-over detection |
 | `evaluate TEXT [--no-llm] [--json]` | Grade text without audio |
@@ -56,17 +57,27 @@ and pass threshold.
 `middlemanagementd tui` opens a live dashboard. It is a plain client of the daemon's HTTP API, so it works
 from any machine that can reach the daemon.
 
-* **Status**: state, audio client, countdown to the next interrogation, LLM health, selected manager
-* **Escalation ladder**: levels 0–5 with your current level marked
-* **Corporate reputation**: rank, progress to the next title, streaks, PIPs, times you talked over management
-* **Most leveraged buzzwords**
-* **Live interrogation feed**: question, your transcribed answer, barge-ins, the manager's feedback, as they happen
-* **Last performance review**: per-metric score bars and verdict
-* **History** of past interrogations
+Three tabs:
+
+1. **Dashboard**
+   * **Status**: state, audio client, countdowns to the next interrogation and the next performance review,
+     LLM health, selected manager
+   * **Escalation ladder**: levels 0–5 with your current level marked
+   * **Corporate reputation**: rank, progress to the next title, a score trend sparkline (green pass, red fail),
+     streaks, PIPs, times you talked over management
+   * **Most leveraged buzzwords**
+   * **Live interrogation feed**: question, your transcribed answer, barge-ins, the manager's feedback, as they happen
+   * **Last evaluation**: per-metric score bars and verdict
+   * **History**: press Enter on a row to open it in the History tab
+2. **History**: the last 100 interrogations. The highlighted one is shown in full: question, your answer, every
+   score, and what the manager said back.
+3. **Reviews**: your weekly performance reviews, each as a full HR document with the data it was calibrated on.
 
 | Key | |
 |---|---|
+| `1` `2` `3` | Dashboard / History / Reviews |
 | `t` | Interrogate me now (with the selected manager) |
+| `w` | Weekly performance review now (this week so far; with the selected manager, or the configured reviewer) |
 | `m` | Cycle manager: random → each personality |
 | `p` | Pause / resume scheduling |
 | `k` | **Kill switch** |
@@ -143,6 +154,25 @@ Failures add `aggressiveness` levels, and passes remove `decay_on_pass`. Passing
 Ranks run from *Unaligned Individual Contributor* to *Global Thought Leadership Evangelist*, driven by synergy
 points (pass: +score/8, fail: −2, PIP: −15).
 
+## Weekly performance review
+
+Every Friday at 16:55 (`review.weekday`, `review.time`), the **Disappointed Vice President** (`review.personality`)
+asks whether you have a minute and reads your weekly performance review aloud, with hold music while they "pull up
+your file".
+
+* **Code computes the facts**: interrogations, pass rate, average and best/worst scores against last week, top
+  buzzwords, escalation peak, times cut off and times you talked over management, PIPs, points, rank change.
+* **HR calibration (also code) fixes the rating**: ★ to ★★★★★, from *Does Not Meet Expectations* to
+  *Transformational Thought Leader*, or *Insufficient Visibility* if you were never interrogated.
+* **The LLM only writes it up**: a headline, strengths, development areas, absurd objectives for next week, and a
+  closing remark. If pepper is down, an HR template does it instead.
+
+The review is read aloud only when an interrogation would be allowed then: not paused, no kill switch, audio
+client connected, outside quiet hours, on an active weekday. Otherwise it is **filed silently** to read later in
+the TUI (`3`) or with `middlemanagementd review`. If the daemon was down at 16:55, the review happens when it
+comes back, as long as it's still the same week. `review --now` and `w` in the TUI hold an extra review whenever
+you like. These don't replace Friday's.
+
 ## Talking over the manager
 
 You can cut in while the manager is speaking:
@@ -187,16 +217,17 @@ top on every hold, as is traditional.
 ## Development
 
 ```bash
-.venv/bin/python -m pytest      # 76 tests; mock audio + fake LLM, no devices or network needed
+.venv/bin/python -m pytest      # 89 tests; mock audio + fake LLM, no devices or network needed
 ```
 
 The tests cover deterministic scoring, LLM parsing and fallback, the scheduler (quiet hours, weekdays,
-frequency), escalation and PIPs, VAD, reputation/ranks, the whole interrogation slice with mock adapters, and
-the daemon and audio client over a real WebSocket, including the kill switch and local hush.
+frequency), escalation and PIPs, VAD, reputation/ranks, weekly reviews (facts, rating, LLM and template
+write-ups, scheduling), the whole interrogation slice with mock adapters, the daemon and audio client over a real
+WebSocket including the kill switch and local hush, and the TUI driven headlessly.
 
 ## Known limitations
 
 * Over loud speakers you have to out-shout the manager at the mic for barge-in to register (see above).
 * The energy VAD is simple. In a loud room, raise `listen.energy_threshold` or use a headset.
-* With a ~27B model at ~7 tok/s, grading takes 20–35 s (hence the hold music). A smaller model makes the
+* With a ~27B model at ~7 tok/s, grading takes 20–35 s and a weekly review about 55 s (hence the hold music). A smaller model makes the
   manager quicker but less eloquent.

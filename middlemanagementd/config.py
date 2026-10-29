@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
+from datetime import time as dtime
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,7 @@ class LLMConfig:
     max_tokens_feedback: int = 140
     max_tokens_monologue: int = 380
     max_tokens_pip: int = 220
+    max_tokens_review: int = 520
     # Qwen3-style templates: skip <think> blocks, which are slow and unspoken.
     disable_thinking: bool = True
     json_mode: bool = True
@@ -184,6 +186,18 @@ class PersonalityConfig:
 
 
 @dataclass
+class ReviewConfig:
+    # The weekly performance review: a formal summary of your week, read aloud by a manager.
+    enabled: bool = True
+    weekday: int = 4  # Monday=0 ... Friday=4
+    time: str = "16:55"  # the traditional moment for bad news
+    personality: str = "disappointed_vp"  # or "random"
+    # Read it aloud when allowed (not paused/killed, audio connected, outside quiet hours);
+    # otherwise it is filed silently for the TUI and `middlemanagementd review`.
+    deliver_aloud: bool = True
+
+
+@dataclass
 class StorageConfig:
     database_path: str = "~/.local/share/middlemanagementd/middlemanagementd.db"
     store_transcripts: bool = True
@@ -211,6 +225,7 @@ class Config:
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     escalation: EscalationConfig = field(default_factory=EscalationConfig)
     personality: PersonalityConfig = field(default_factory=PersonalityConfig)
+    review: ReviewConfig = field(default_factory=ReviewConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     source_path: str | None = None
@@ -255,6 +270,12 @@ def validate(cfg: Config) -> None:
         raise ValueError(f"evaluation.difficulty must be one of {sorted(cfg.evaluation.pass_thresholds)}")
     if not 0.0 <= cfg.evaluation.llm_weight <= 1.0:
         raise ValueError("evaluation.llm_weight must be within [0, 1]")
+    if not 0 <= cfg.review.weekday <= 6:
+        raise ValueError("review.weekday must be 0 (Monday) .. 6 (Sunday)")
+    try:
+        dtime.fromisoformat(cfg.review.time)
+    except ValueError as e:
+        raise ValueError(f"review.time must be HH:MM: {e}") from e
     cfg.escalation.interrupt_after_seconds = {
         int(k): float(v) for k, v in cfg.escalation.interrupt_after_seconds.items()
     }

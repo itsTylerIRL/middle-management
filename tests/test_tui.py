@@ -30,8 +30,30 @@ EVENTS = [
     {"seq": 2, "ts": time.time(), "type": "question", "data": {"personality": "Big Four Consultant", "text": "Go."}},
     {"seq": 3, "ts": time.time(), "type": "evaluation", "data": EVAL},
 ]
-HISTORY = [{"ts": time.time(), "personality": "big_four", "overall": 74.0, "passed": True, "level_before": 2,
-            "level_after": 0, "transcript": "We are leveraging synergies."}]
+HISTORY = [
+    {"id": 2, "ts": time.time(), "trigger": "manual", "personality": "big_four", "question": "Go.",
+     "transcript": "We are leveraging synergies.", "overall": 74.0, "passed": True, "level_before": 2,
+     "level_after": 0, **{k: EVAL[k] for k in ("scores", "threshold", "evaluator", "word_count", "jargon_ratio",
+                                                "detected_jargon")},
+     "feedback": "Visionary.", "interrupted": False, "barge_ins": 1},
+    {"id": 1, "ts": time.time() - 3600, "trigger": "scheduled", "personality": "linkedin", "question": "Wins?",
+     "transcript": "I fixed the bug.", "overall": 31.0, "passed": False, "level_before": 1, "level_after": 2,
+     "scores": {}, "threshold": 58.0, "evaluator": "rules", "word_count": 4, "jargon_ratio": 0.0,
+     "detected_jargon": [], "feedback": "Concerning.", "interrupted": True, "barge_ins": 0},
+]
+REVIEWS = [{
+    "id": 7, "ts": time.time(), "period_start": 0, "period_end": 1, "personality": "disappointed_vp", "rating": 2,
+    "rating_name": "Needs Synergy Improvement", "author": "llm", "trigger": "scheduled", "delivered": True,
+    "summary": {"week_of": "Monday 26 October 2026", "interrogations": 2, "passed": 1, "failed": 1,
+                "average_score": 52.5, "previous_week_average": None, "best_score": 74, "worst_score": 31,
+                "escalation_start": 1, "escalation_end": 0, "highest_escalation": 2,
+                "top_buzzwords": [["synergy", 1]], "times_cut_off": 1, "times_talked_over_management": 1,
+                "pips_issued": 0, "synergy_points_change": 7.2, "rank_at_start": "Unaligned Individual Contributor",
+                "rank_at_end": "Associate Synergy Coordinator"},
+    "review": {"headline": "A week of directional impact.", "strengths": ["Synergy, leveraged."],
+               "development_areas": ["You fixed a bug. Why?"], "objectives": ["Align the alignment."],
+               "closing": "Let's circle back."},
+}]
 
 
 class FakeDaemon:
@@ -39,6 +61,8 @@ class FakeDaemon:
         self.online = online
         self.calls: list[tuple[str, str, Any]] = []
         self.status = dict(STATUS)
+        self.reviews: list[dict[str, Any]] = []
+        self.events = list(EVENTS)
 
     def __call__(self, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
         self.calls.append((method, path, body))
@@ -52,7 +76,9 @@ class FakeDaemon:
             return HISTORY
         if path.startswith("/api/events"):
             since = int(path.split("since=")[1])
-            return [e for e in EVENTS if e["seq"] > since]
+            return [e for e in self.events if e["seq"] > since]
+        if path.startswith("/api/reviews"):
+            return self.reviews
         if path == "/api/pause":
             self.status["paused"] = True
         if path == "/api/kill":
@@ -88,7 +114,8 @@ async def test_dashboard_populates_from_daemon():
         assert "3×" in text_of(app, "#reputation")  # talked over management
         assert "synergy" in text_of(app, "#buzzwords")
         assert "PASS" in text_of(app, "#review")
-        assert app.query_one("#history", DataTable).row_count == 1
+        assert app.query_one("#history", DataTable).row_count == 2
+        assert "▇" in text_of(app, "#reputation") or "▆" in text_of(app, "#reputation")  # score trend
         assert len(app.query_one("#feed", RichLog).lines) > 0
         app.save_screenshot("tui.svg", path=str(__import__("os").environ.get("MMD_SCREENSHOT_DIR", "/tmp")))
 
@@ -153,3 +180,51 @@ def test_reputation_at_top_rank():
     c.print(reputation_renderable(STATS | {"rank_number": 8, "rank": "Global Thought Leadership Evangelist",
                                            "synergy_points": 600}))
     assert "nowhere left to ascend" in c.export_text()
+
+
+async def test_history_tab_shows_full_interrogation():
+    api = FakeDaemon()
+    app = ManagementConsole(api, poll_seconds=60)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await settle(pilot, app)
+        # Enter on the dashboard's second row opens that interrogation in the History tab.
+        table = app.query_one("#history", DataTable)
+        table.focus()
+        await pilot.press("down", "enter")
+        await pilot.pause()
+        assert app.query_one("#tabs").active == "history-tab"
+        detail = text_of(app, "#detail")
+        assert "I fixed the bug." in detail and "Concerning." in detail and "cut off" in detail
+        await pilot.press("up")
+        await pilot.pause()
+        assert "We are leveraging synergies." in text_of(app, "#detail")
+        assert "talked over management ×1" in text_of(app, "#detail")
+        await pilot.press("1")
+        await pilot.pause()
+        assert app.query_one("#tabs").active == "dashboard"
+
+
+async def test_reviews_tab_and_request():
+    api = FakeDaemon()
+    app = ManagementConsole(api, poll_seconds=60)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await settle(pilot, app)
+        await pilot.press("3")
+        assert "No performance reviews" in text_of(app, "#review-doc")
+        await pilot.press("w")
+        await pilot.pause()
+        assert ("/api/review", {}) in api.posts()
+        # The daemon files it; the TUI picks it up from the event stream.
+        api.reviews = REVIEWS
+        api.events.append({"seq": 4, "ts": time.time(), "type": "review_ready",
+                           "data": {"id": 7, "personality": "Disappointed VP", "rating": 2,
+                                    "rating_name": "Needs Synergy Improvement",
+                                    "headline": "A week of directional impact.", "delivered": True,
+                                    "week_of": "Monday 26 October 2026"}})
+        await app.poll_events()
+        await pilot.pause()
+        assert app.query_one("#reviews", DataTable).row_count == 1
+        doc = text_of(app, "#review-doc")
+        assert "Needs Synergy Improvement" in doc and "Align the alignment." in doc and "★★☆☆☆" in doc
+        assert "Unaligned Individual Contributor → Associate Synergy Coordinator" in doc
+        app.save_screenshot("tui-reviews.svg", path=str(__import__("os").environ.get("MMD_SCREENSHOT_DIR", "/tmp")))
