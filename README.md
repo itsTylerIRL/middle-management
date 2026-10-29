@@ -38,6 +38,7 @@ answers (`--speak` to hear the manager anyway). `middlemanagementd evaluate "you
 | `trigger [-p PERSONALITY] [--no-follow]` | Interrogate now and stream the session to the terminal |
 | **`kill`** / `revive` | **Kill switch**: silence everything, halt scheduling, refuse triggers; persists across restarts |
 | **`hush`** | Silence the local audio client *immediately* (works even if the daemon is unreachable), then `kill` |
+| **`tui`** | **Full-screen management console** (see below) |
 | `status` | State, audio client, next interrogation, escalation level, rank, LLM health |
 | `stats` / `history` | Corporate reputation and recent interrogations |
 | `config [--init]` | Show the effective config / write a starter config |
@@ -49,6 +50,30 @@ answers (`--speak` to hear the manager anyway). `middlemanagementd evaluate "you
 Personalities: `passive_aggressive`, `big_four`, `disappointed_vp`, `scrum_master`, `linkedin`,
 `chief_synergy`. Each has its own questions, vocabulary, interruption lines, speech rate, grading priorities
 and pass threshold.
+
+## Management console (TUI)
+
+`middlemanagementd tui` opens a live dashboard. It is a plain client of the daemon's HTTP API, so it works
+from any machine that can reach the daemon.
+
+* **Status**: state, audio client, countdown to the next interrogation, LLM health, selected manager
+* **Escalation ladder**: levels 0–5 with your current level marked
+* **Corporate reputation**: rank, progress to the next title, streaks, PIPs, times you talked over management
+* **Most leveraged buzzwords**
+* **Live interrogation feed**: question, your transcribed answer, barge-ins, the manager's feedback, as they happen
+* **Last performance review**: per-metric score bars and verdict
+* **History** of past interrogations
+
+| Key | |
+|---|---|
+| `t` | Interrogate me now (with the selected manager) |
+| `m` | Cycle manager: random → each personality |
+| `p` | Pause / resume scheduling |
+| `k` | **Kill switch** |
+| `r` | Revive |
+| `h` | Hush: silence the local audio client instantly, plus kill switch |
+| `s` | Start the daemon + local audio client (when offline) |
+| `q` | Quit (the daemon keeps running) |
 
 ## Split deployment: daemon on deepdish, audio on chef
 
@@ -162,7 +187,7 @@ top on every hold, as is traditional.
 ## Development
 
 ```bash
-.venv/bin/python -m pytest      # 70 tests; mock audio + fake LLM, no devices or network needed
+.venv/bin/python -m pytest      # 76 tests; mock audio + fake LLM, no devices or network needed
 ```
 
 The tests cover deterministic scoring, LLM parsing and fallback, the scheduler (quiet hours, weekdays,

@@ -20,11 +20,10 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from . import __version__
+from . import __version__, render
 from .config import Config, load_config
 from .escalation import LEVEL_NAMES
 from .logs import setup_logging
-from .scoring import METRICS
 
 console = Console()
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", "~/.local/state")).expanduser() / "middlemanagementd"
@@ -65,90 +64,18 @@ def daemon_up(cfg: Config) -> bool:
 
 
 # --- rendering ----------------------------------------------------------------
-def bar(value: float, width: int = 20) -> str:
-    filled = int(round(value / 100 * width))
-    color = "green" if value >= 70 else "yellow" if value >= 45 else "red"
-    return f"[{color}]{'█' * filled}[/][dim]{'░' * (width - filled)}[/] {value:5.1f}"
-
-
 def render_evaluation(ev: dict[str, Any], transcript: str | None = None) -> None:
-    table = Table(show_header=False, box=None, padding=(0, 1))
-    for m in METRICS:
-        table.add_row(m.replace("_", " ").title(), bar(ev["scores"].get(m, 0)))
-    verdict = "[bold green]PASS: EXECUTIVE MATERIAL[/]" if ev["passed"] else "[bold red]FAIL: INSUFFICIENT SYNERGY[/]"
-    lines = [
-        verdict,
-        f"Overall [bold]{ev['overall']:.1f}[/] / threshold {ev['threshold']:.1f}  "
-        f"[dim]({ev['evaluator']}, {ev['word_count']} words, {ev['jargon_ratio'] * 100:.0f}% jargon)[/]",
-    ]
-    if ev.get("detected_jargon"):
-        lines.append("Detected: [magenta]" + ", ".join(ev["detected_jargon"]) + "[/]")
-    if ev.get("critique"):
-        lines.append(f"[italic]{ev['critique']}[/]")
-    if ev.get("llm_error"):
-        lines.append(f"[dim]LLM unavailable, deterministic scoring used: {ev['llm_error'][:100]}[/]")
-    if transcript is not None:
-        console.print(Panel(transcript or "[dim](silence)[/]", title="Your status update", border_style="blue"))
-    console.print(Panel(table, title="Performance Review", border_style="magenta"))
-    console.print("\n".join(lines))
+    console.print(render.evaluation(ev, transcript))
 
 
 def render_event(e: dict[str, Any]) -> None:
-    t, d = e["type"], e["data"]
-    if t == "session_started":
-        console.rule(f"[bold magenta]Interrogation by {d['personality']}[/]")
-    elif t == "question":
-        console.print(f"[bold cyan]{d['personality']}:[/] {d['text']}")
-    elif t == "transcript":
-        note = " [red](interrupted)[/]" if d.get("interrupted") else ""
-        console.print(Panel(d["text"] or "[dim](silence)[/]", title=f"You{note}", border_style="blue"))
-    elif t == "evaluation":
-        render_evaluation(d)
-    elif t == "feedback":
-        level = d.get("level", 0)
-        console.print(Panel(d["text"], title=f"Feedback: level {level} {LEVEL_NAMES.get(level, '')}",
-                            border_style="red" if level >= 3 else "yellow" if level else "green"))
-    elif t == "barge_in":
-        if d["mode"] == "talk_over":
-            console.print("[bold red]You talked over management.[/] [dim]Management is now louder.[/]")
-        else:
-            console.print(f"[yellow]You cut in{' on the question' if d['phase'] == 'question' else ''}:[/] "
-                          f"{d.get('text') or '(inaudible)'}")
-    elif t == "conceded":
-        console.print(f"[bold green]Management concedes.[/] Escalation reduced to level {d['level']}.")
-    elif t == "rank_change":
-        console.print(f"[bold]Title change:[/] {d['from']} → [bold green]{d['to']}[/]")
-    elif t == "session_aborted":
-        console.print(f"[red]Interrogation aborted:[/] {d['reason']}")
-    elif t == "session_finished":
-        console.print(f"[dim]Finished in {d['duration_seconds']}s. Rank: {d['rank_after']}[/]")
+    if (r := render.event(e)) is not None:
+        console.print(r)
 
 
 def render_stats(s: dict[str, Any]) -> None:
-    t = Table(title="Corporate Reputation", show_header=False, title_style="bold magenta")
-    t.add_row("Current rank", f"[bold]{s['rank']}[/] (#{s['rank_number']})")
-    t.add_row("Synergy points", f"{s['synergy_points']}" + (
-        f" [dim]({s['points_to_next_rank']} to next rank)[/]" if s["points_to_next_rank"] is not None else ""))
-    t.add_row("Escalation level", f"{s['escalation_level']} ({LEVEL_NAMES.get(s['escalation_level'])})")
-    t.add_row("Total interrogations", str(s["total_interrogations"]))
-    t.add_row("Successful status reports", f"[green]{s['successful_reports']}[/]")
-    t.add_row("Failed evaluations", f"[red]{s['failed_evaluations']}[/]")
-    t.add_row("Average score", str(s["average_score"]))
-    t.add_row("Average jargon density", f"{s['average_jargon_density'] * 100:.1f}%")
-    t.add_row("Longest successful monologue", f"{s['longest_successful_monologue_words']} words")
-    t.add_row("Consecutive successes", f"{s['consecutive_successes']} (best {s['best_streak']})")
-    t.add_row("PIPs issued", str(s["pips_issued"]))
-    t.add_row("Times you talked over management", str(s.get("times_talked_over_management", 0)))
-    if s.get("open_pip"):
-        t.add_row("[red]Open PIP[/]", ", ".join(s["open_pip"]["terms"]))
-    console.print(t)
-    if s["top_buzzwords"]:
-        b = Table(title="Most Leveraged Buzzwords", title_style="bold magenta")
-        b.add_column("Term")
-        b.add_column("Uses", justify="right")
-        for term, n in s["top_buzzwords"]:
-            b.add_row(term, str(n))
-        console.print(b)
+    for table in render.stats_tables(s):
+        console.print(table)
 
 
 # --- commands -----------------------------------------------------------------
@@ -195,10 +122,12 @@ def _spawn(argv: list[str], logname: str) -> int:
     return proc.pid
 
 
-def cmd_start(cfg: Config, args: argparse.Namespace) -> int:
+def start_background(cfg: Config, with_audio: bool) -> list[str]:
+    """Start the daemon (and optionally a local audio client) detached. Returns human-readable messages."""
     base = ["--config", cfg.source_path] if cfg.source_path else []
+    messages = []
     if daemon_up(cfg):
-        console.print("[yellow]Daemon already running.[/]")
+        messages.append("[yellow]Daemon already running.[/]")
     else:
         pid = _spawn([*base, "serve"], "daemon.log")
         for _ in range(50):
@@ -206,16 +135,25 @@ def cmd_start(cfg: Config, args: argparse.Namespace) -> int:
                 break
             time.sleep(0.2)
         else:
-            console.print(f"[red]Daemon did not come up; see {STATE_DIR / 'daemon.log'}[/]")
-            return 1
-        console.print(f"[green]middlemanagementd started[/] (pid {pid}). Synergy is now being enforced.")
-    if args.with_audio:
-        pid = _spawn([*base, "audio-client"], "audio-client.log")
-        console.print(f"[green]Audio client started[/] (pid {pid}); log: {STATE_DIR / 'audio-client.log'}")
+            raise ApiError(f"daemon did not come up; see {STATE_DIR / 'daemon.log'}")
+        messages.append(f"[green]middlemanagementd started[/] (pid {pid}). Synergy is now being enforced.")
+    if with_audio:
+        if audio_client_running():
+            messages.append("[yellow]Audio client already running.[/]")
+        else:
+            pid = _spawn([*base, "audio-client"], "audio-client.log")
+            messages.append(f"[green]Audio client started[/] (pid {pid}); log: {STATE_DIR / 'audio-client.log'}")
+    return messages
+
+
+def cmd_start(cfg: Config, args: argparse.Namespace) -> int:
+    for msg in start_background(cfg, args.with_audio):
+        console.print(msg)
     return 0
 
 
-def _signal_audio_client(sig: signal.Signals) -> bool:
+def signal_audio_client(sig: signal.Signals | int) -> bool:
+    """Signal the local audio client via its pidfile (signal 0 just checks it's alive)."""
     from .audio.client import pidfile_path
 
     try:
@@ -225,13 +163,17 @@ def _signal_audio_client(sig: signal.Signals) -> bool:
         return False
 
 
+def audio_client_running() -> bool:
+    return signal_audio_client(0)
+
+
 def cmd_stop(cfg: Config, args: argparse.Namespace) -> int:
     try:
         api(cfg, "POST", "/api/shutdown")
         console.print("[green]Daemon stopping.[/] The meeting is over.")
     except ApiError as e:
         console.print(f"[yellow]{e}[/]")
-    if args.audio and _signal_audio_client(signal.SIGTERM):
+    if args.audio and signal_audio_client(signal.SIGTERM):
         console.print("[green]Local audio client stopped.[/]")
     return 0
 
@@ -246,7 +188,7 @@ def _simple(path: str):  # noqa: ANN202
 
 
 def cmd_hush(cfg: Config, args: argparse.Namespace) -> int:
-    local = _signal_audio_client(signal.SIGUSR1)
+    local = signal_audio_client(signal.SIGUSR1)
     console.print("[green]Local audio silenced.[/]" if local else "[dim]No local audio client running.[/]")
     try:
         api(cfg, "POST", "/api/kill", timeout=3)
@@ -495,6 +437,12 @@ def cmd_rehearse(cfg: Config, args: argparse.Namespace) -> int:
         return 0
 
 
+def cmd_tui(cfg: Config, args: argparse.Namespace) -> int:
+    from .tui import run
+
+    return run(cfg)
+
+
 def cmd_download_models(cfg: Config, args: argparse.Namespace) -> int:
     from .config import expand
 
@@ -548,6 +496,7 @@ def build_parser() -> argparse.ArgumentParser:
                    ).set_defaults(func=cmd_hush)
 
     sub.add_parser("status", help="daemon status").set_defaults(func=cmd_status)
+    sub.add_parser("tui", help="full-screen management console").set_defaults(func=cmd_tui)
     s = sub.add_parser("trigger", help="interrogate me now")
     s.add_argument("--personality", "-p")
     s.add_argument("--no-follow", action="store_true", help="don't stream the session to the terminal")

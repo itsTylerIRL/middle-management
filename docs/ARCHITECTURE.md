@@ -45,7 +45,9 @@ For a single machine, `middlemanagementd serve --local-audio` runs the same engi
 | `audio/engine.py` | The real thing: chime, hold music, say (with barge-in), listen (VAD → STT) |
 | `audio/echo.py` | Echo model, calibration, barge-in detector |
 | `audio/client.py` | WebSocket client that executes ops; local hush via SIGUSR1 |
-| `cli.py` | Rich terminal UI over the HTTP API |
+| `cli.py` | Rich terminal commands over the HTTP API |
+| `tui.py` | Textual management console over the same API |
+| `render.py` | Rich renderables shared by both |
 
 ## Interrogation flow
 

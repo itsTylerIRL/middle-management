@@ -146,7 +146,8 @@ class LLMClient:
     async def health(self) -> dict[str, Any]:
         try:
             url = self.cfg.base_url.rstrip("/") + "/models"
-            timeout = aiohttp.ClientTimeout(total=5)
+            # Leave room for a slow first mDNS lookup of *.local hosts.
+            timeout = aiohttp.ClientTimeout(total=self.cfg.connect_timeout_seconds + 5)
             async with self._get_session().get(url, timeout=timeout) as resp:
                 data = await resp.json(content_type=None)
             models = [m.get("id") or m.get("name") for m in data.get("data", data.get("models", []))]
