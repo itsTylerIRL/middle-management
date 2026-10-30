@@ -322,11 +322,15 @@ class ManagementConsole(App[None]):
         self.query_one("#history-full", DataTable).add_columns("When", "Manager", "Score", "Result", "Level")
         self.query_one("#reviews", DataTable).add_columns("Week of", "Rating", "Reviewer")
         self.query_one("#escalation", Static).update(escalation_renderable(0))
-        self.call_after_refresh(self.refresh_all)
+
+    async def on_ready(self) -> None:
+        # Not on_mount: widgets deep inside the inactive tabs (#detail, #review-doc) can still be mounting then,
+        # which a slow machine (Windows CI) actually hit.
         self.set_interval(self.poll_seconds, self.poll_events)
         self.set_interval(2.0, self.refresh_status)
         self.set_interval(15.0, self.refresh_reputation)
         self.set_interval(30.0, self.refresh_llm)
+        await self.refresh_all()
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         # Under a confirm dialog only the safety keys stay live (and `d` can't stack a second dialog).
@@ -405,7 +409,8 @@ class ManagementConsole(App[None]):
             full.move_cursor(row=min(keep, len(history) - 1))
             self.show_interrogation(full.cursor_row)
         else:
-            self.query_one("#detail", Static).update(Text.from_markup("[dim]No interrogations on file.[/]"))
+            for detail in self.query("#detail").results(Static):
+                detail.update(Text.from_markup("[dim]No interrogations on file.[/]"))
 
     async def refresh_reviews(self) -> None:
         from .cli import ApiError
@@ -427,15 +432,19 @@ class ManagementConsole(App[None]):
             table.move_cursor(row=min(keep, len(reviews) - 1))
             self.show_review(table.cursor_row)
         else:
-            self.query_one("#review-doc", Static).update(Text.from_markup("[dim]No performance reviews on file.[/]"))
+            for doc in self.query("#review-doc").results(Static):
+                doc.update(Text.from_markup("[dim]No performance reviews on file.[/]"))
 
     def show_interrogation(self, row: int) -> None:
+        # query, not query_one: a no-op if the inactive tab's panel hasn't mounted yet.
         if 0 <= row < len(self.history):
-            self.query_one("#detail", Static).update(render.interrogation(self.history[row]))
+            for detail in self.query("#detail").results(Static):
+                detail.update(render.interrogation(self.history[row]))
 
     def show_review(self, row: int) -> None:
         if 0 <= row < len(self.reviews):
-            self.query_one("#review-doc", Static).update(render.review(self.reviews[row]))
+            for doc in self.query("#review-doc").results(Static):
+                doc.update(render.review(self.reviews[row]))
 
     def on_data_table_row_highlighted(self, message: DataTable.RowHighlighted) -> None:
         if message.data_table.id == "history-full":
