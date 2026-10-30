@@ -22,20 +22,22 @@ faster-whisper for ears, Piper for a voice. No cloud, no paid APIs, and no recor
 
 ## Requirements
 
-* **Linux** with PipeWire or PulseAudio (the audio client uses `paplay`/`parecord` from `pulseaudio-utils`).
-  The daemon itself runs anywhere Python does.
-* **Python 3.12+**
+* **Linux, macOS or Windows.** On Linux, audio goes through PipeWire/PulseAudio (`paplay`/`parecord` from
+  `pulseaudio-utils`); on macOS and Windows, through PortAudio, which installs with the `audio` extra.
+  See [Platform notes](#platform-notes).
+* **Python 3.12+** (3.12 or 3.13 on Intel Macs and on macOS 13, for the speech libraries)
 * **An OpenAI-compatible LLM endpoint**: [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server`
   (default `http://127.0.0.1:8080/v1`), Ollama, LM Studio and so on. Tested with a 27B model. Smaller models work
   and are faster, but the manager gets less eloquent. With no LLM at all, it grades with rules and speaks fixed lines.
-* Optional: `ffmpeg` (for a custom hold music file) and `espeak-ng` (a fallback voice if you skip Piper).
+* Optional: `ffmpeg` (for a custom hold music file). Without a Piper voice, the manager speaks with your OS's
+  own voice (macOS `say`, Windows SAPI) or `espeak-ng` on Linux.
 
 ## Quick start (single machine)
 
 ```bash
 git clone https://github.com/itsTylerIRL/middle-management.git && cd middle-management
 python3 -m venv .venv
-.venv/bin/pip install -e '.[audio,dev]'
+.venv/bin/pip install -e '.[audio,dev]'           # Windows: .venv\Scripts\pip install -e ".[audio,dev]"
 .venv/bin/middlemanagementd download-models        # Piper voice (~120 MB) + Whisper small.en (~250 MB)
 .venv/bin/middlemanagementd config --init          # writes ~/.config/middlemanagementd/config.yaml
 #   edit llm.base_url if your LLM isn't llama-server on 127.0.0.1:8080
@@ -56,6 +58,9 @@ middlemanagementd update           # pull it, reinstall if needed, restart the d
 `pyproject.toml` changed (keeping the `audio` extra if you have it), and restarts whatever was running, through
 systemd or as the background processes `start` creates. It waits if an interrogation is in progress. If your
 daemon runs on another machine, run `update` there too. Restart any open consoles afterwards.
+
+On Windows, use `.venv\Scripts\middlemanagementd` wherever this README says `.venv/bin/middlemanagementd`
+(or activate the venv and just type `middlemanagementd`).
 
 No microphone handy? `middlemanagementd rehearse` runs a full interrogation in the terminal with typed
 answers (`--speak` to hear the manager anyway). `middlemanagementd evaluate "your text"` just grades text.
@@ -159,6 +164,10 @@ cp systemd/middlemanagementd-audio.service ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now middlemanagementd-audio
 ```
 
+On a Mac or Windows desk machine, skip systemd: `middlemanagementd start --with-audio` won't start a second
+daemon when `server.url` points at the server, so use `middlemanagementd audio-client` (in a terminal you keep
+open, or as a login item / scheduled task).
+
 Then from either machine (with `server.url` and `MMD_TOKEN` set): `middlemanagementd status`.
 
 ## Configuration
@@ -256,6 +265,22 @@ You count as talking over it when the mic is clearly louder than that prediction
 * `echo_cancel: pipewire` loads PipeWire's WebRTC echo canceller at runtime, nothing persisted. On the HDMI
   output it was tested with it was inconsistent, so it's off by default; try it if your hardware cooperates.
 
+## Platform notes
+
+| | Linux | macOS | Windows |
+|---|---|---|---|
+| Audio | PipeWire/PulseAudio (`paplay`/`parecord`); PortAudio if those are missing | PortAudio (bundled) | PortAudio (bundled) |
+| Fallback voice (no Piper) | `espeak-ng`, if installed | `say` | SAPI (built in) |
+| Echo cancellation | `audio.echo_cancel: pipewire` | headphones recommended | headphones recommended |
+| Run at login | systemd user units (`systemd/`) | `start --with-audio` from a login item | `start --with-audio` from a scheduled task |
+
+* **Device names**: `middlemanagementd test-audio` lists them. On PortAudio, `output_device`/`input_device` match
+  any part of a name (`"MacBook Pro Speakers"`, `"Headset"`); `default` follows the system setting.
+* **macOS** asks once for microphone access for your terminal app; allow it, or transcription only hears silence.
+  On Intel Macs and macOS 13, use Python 3.12 or 3.13: the speech libraries' last builds for them stop there.
+* **Windows**: if Settings → Privacy → Microphone blocks desktop apps, the manager can't hear you either.
+* To force a backend, set `audio.backend: portaudio` (or `pulse`).
+
 ## Hold music
 
 While the LLM deliberates, the client plays synthesized elevator jazz. To use your own track (*Opus No. 1*,
@@ -265,10 +290,11 @@ top on every hold, as is traditional.
 ## Safety and privacy
 
 * **It can always be silenced**: `hush` (local, instant), `kill` (global, persistent),
-  `systemctl --user stop middlemanagementd-audio`, or simply losing the network (the client goes quiet when
-  it loses the daemon). Every sound is a killable subprocess, and every playback has a duration cap.
+  `stop --audio` (or `systemctl --user stop middlemanagementd-audio`), or simply losing the network (the client
+  goes quiet when it loses the daemon). Every sound is a killable subprocess or an abortable PortAudio stream,
+  and every playback has a duration cap.
 * Volume is capped client-side at `max_volume`, relative to your system volume. If your sink is at 160%,
-  the cap is too, so check `pactl get-sink-volume @DEFAULT_SINK@`.
+  the cap is too (on Linux, check `pactl get-sink-volume @DEFAULT_SINK@`).
 * Microphone audio stays in memory and is discarded after transcription. Transcripts (text) are stored in
   SQLite unless `store_transcripts: false`.
 * No root needed. The units are user services with `NoNewPrivileges`.

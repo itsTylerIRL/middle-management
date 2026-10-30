@@ -6,7 +6,6 @@ import argparse
 import asyncio
 import json
 import os
-import signal
 import subprocess
 import sys
 import time
@@ -122,8 +121,11 @@ def cmd_audio_client(cfg: Config, args: argparse.Namespace) -> int:
 def _spawn(argv: list[str], logname: str) -> int:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     logf = open(STATE_DIR / logname, "ab")  # noqa: SIM115 - handed to the child
+    # Detach from this terminal so closing it doesn't take the daemon along.
+    detach: dict[str, Any] = ({"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
+                              if sys.platform == "win32" else {"start_new_session": True})
     proc = subprocess.Popen([sys.executable, "-m", "middlemanagementd", *argv], stdout=logf, stderr=logf,
-                            stdin=subprocess.DEVNULL, start_new_session=True)
+                            stdin=subprocess.DEVNULL, **detach)
     return proc.pid
 
 
@@ -157,19 +159,30 @@ def cmd_start(cfg: Config, args: argparse.Namespace) -> int:
     return 0
 
 
-def signal_audio_client(sig: signal.Signals | int) -> bool:
-    """Signal the local audio client via its pidfile (signal 0 just checks it's alive)."""
-    from .audio.client import pidfile_path
+def audio_client_command(command: str) -> bool:
+    """hush / stop / ping the local audio client. False if none is running."""
+    from .audio.client import control
 
+    return control(command) or _legacy_audio_client(command)
+
+
+def _legacy_audio_client(command: str) -> bool:
+    """Audio clients from before 0.3.0 only understand signals via their pidfile (POSIX only)."""
+    import signal
+
+    if not hasattr(signal, "SIGUSR1"):
+        return False
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/middlemanagementd-{os.getuid()}"
     try:
-        os.kill(int(pidfile_path().read_text().strip()), sig)
+        pid = int((Path(runtime) / "middlemanagementd-audio.pid").read_text().strip())
+        os.kill(pid, {"hush": signal.SIGUSR1, "stop": signal.SIGTERM, "ping": 0}[command])
         return True
-    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+    except (OSError, ValueError, KeyError):
         return False
 
 
 def audio_client_running() -> bool:
-    return signal_audio_client(0)
+    return audio_client_command("ping")
 
 
 def cmd_stop(cfg: Config, args: argparse.Namespace) -> int:
@@ -178,7 +191,7 @@ def cmd_stop(cfg: Config, args: argparse.Namespace) -> int:
         console.print("[green]Daemon stopping.[/] The meeting is over.")
     except ApiError as e:
         console.print(f"[yellow]{e}[/]")
-    if args.audio and signal_audio_client(signal.SIGTERM):
+    if args.audio and audio_client_command("stop"):
         console.print("[green]Local audio client stopped.[/]")
     return 0
 
@@ -193,7 +206,7 @@ def _simple(path: str):  # noqa: ANN202
 
 
 def cmd_hush(cfg: Config, args: argparse.Namespace) -> int:
-    local = signal_audio_client(signal.SIGUSR1)
+    local = audio_client_command("hush")
     console.print("[green]Local audio silenced.[/]" if local else "[dim]No local audio client running.[/]")
     try:
         api(cfg, "POST", "/api/kill", timeout=3)
@@ -378,12 +391,14 @@ def cmd_config(cfg: Config, args: argparse.Namespace) -> int:
 
 
 def cmd_test_audio(cfg: Config, args: argparse.Namespace) -> int:
-    from .audio.devices import list_devices
+    from .audio.devices import list_devices, resolve_backend
     from .audio.engine import AudioEngine
     from .audio.port import AudioError, BargeIn, ListenRequest
 
-    console.print(f"Output devices: {list_devices('sinks') or '[red]none / pactl unavailable[/]'}")
-    console.print(f"Input devices:  {[d for d in list_devices('sources') if not d.endswith('.monitor')]}")
+    backend = resolve_backend(cfg.audio.backend)
+    console.print(f"Audio backend: {backend}")
+    console.print(f"Output devices: {list_devices('sinks', backend) or '[red]none found[/]'}")
+    console.print(f"Input devices:  {[d for d in list_devices('sources', backend) if not d.endswith('.monitor')]}")
     console.print(f"Configured: out={cfg.audio.output_device} in={cfg.audio.input_device} "
                   f"volume={cfg.audio.volume} (cap {cfg.audio.max_volume})")
     which = set(args.only or ["chime", "tts", "mic"])
@@ -609,7 +624,7 @@ def cmd_update(cfg: Config, args: argparse.Namespace) -> int:
             console.print("[red]The old daemon didn't stop; restart it by hand.[/]")
             return 1
     if manual_audio:
-        signal_audio_client(signal.SIGTERM)
+        audio_client_command("stop")
         _wait(lambda: not audio_client_running(), 10)
     # _spawn runs a fresh interpreter, so these come back on the updated code.
     try:
@@ -759,7 +774,8 @@ def main(argv: list[str] | None = None) -> int:
     except ApiError as e:
         console.print(f"[red]{e}[/]")
         if "not reachable" in str(e):
-            console.print("[dim]Start it with `middlemanagementd start` or `systemctl --user start middlemanagementd`.[/]")
+            hint = " or `systemctl --user start middlemanagementd`" if sys.platform.startswith("linux") else ""
+            console.print(f"[dim]Start it with `middlemanagementd start`{hint}.[/]")
         return 1
     except KeyboardInterrupt:
         return 130

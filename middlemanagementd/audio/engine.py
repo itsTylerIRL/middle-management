@@ -16,7 +16,7 @@ import numpy as np
 
 from ..config import Config, expand
 from ..logs import event
-from .devices import EchoCancelModule, GainControl, Player, ProcessRegistry, Recorder, check_device
+from .devices import EchoCancelModule, GainControl, ProcessRegistry, make_player, make_recorder, resolve_backend
 from .echo import FRAME_SECONDS, BargeInDetector, EchoModel, calibrate, envelope
 from .port import AudioError, AudioSilenced, BargeIn, ListenRequest, ListenResult, SayResult
 from .speech import STT, TTS, clean_transcript
@@ -62,8 +62,9 @@ class AudioEngine:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
         self.registry = ProcessRegistry()
-        self.player = Player(self.registry, cfg.audio.output_device)
-        self.recorder = Recorder(self.registry, cfg.audio.input_device)
+        self.backend = resolve_backend(cfg.audio.backend)
+        self.player = make_player(self.backend, self.registry, cfg.audio.output_device)
+        self.recorder = make_recorder(self.backend, self.registry, cfg.audio.input_device)
         self.tts = TTS(cfg.tts)
         self.stt = STT(cfg.stt)
         self.echo = EchoModel()
@@ -79,7 +80,10 @@ class AudioEngine:
         self.tts.load()
         if stt:
             self.stt.load()
-        if self.cfg.audio.echo_cancel == "pipewire":
+        if self.cfg.audio.echo_cancel == "pipewire" and self.backend != "pulse":
+            event(log, "echo_cancel: pipewire needs the pulse backend; using the raw devices", logging.WARNING,
+                  backend=self.backend)
+        elif self.cfg.audio.echo_cancel == "pipewire":
             self.echo_cancel = EchoCancelModule(self.cfg.audio.output_device, self.cfg.audio.input_device)
             try:
                 sink, source = self.echo_cancel.load()
@@ -134,7 +138,7 @@ class AudioEngine:
             await self.player.play(samples, SYNTH_SR, gain)
             return
         try:
-            check_device(self.recorder.device, "sources")
+            self.recorder.check()
         except AudioError:
             await self.player.play(samples, SYNTH_SR, gain)
             return

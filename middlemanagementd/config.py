@@ -89,8 +89,12 @@ class AudioConfig:
     barge_in_ratio: float = 1.5
     # ...for this long before it counts as talking over the manager.
     barge_in_min_seconds: float = 0.35
-    # "none" (raw devices; fine with headphones) or "pipewire" (load module-echo-cancel at runtime).
+    # "none" (raw devices; fine with headphones) or "pipewire" (load module-echo-cancel at runtime; Linux with
+    # the pulse backend only).
     echo_cancel: str = "none"
+    # "auto" (paplay/parecord on Linux when installed, PortAudio elsewhere), "pulse" or "portaudio".
+    # Device names: PulseAudio names for pulse; for portaudio, any part of a name from `test-audio`.
+    backend: str = "auto"
 
 
 @dataclass
@@ -109,7 +113,9 @@ class ListenConfig:
 
 @dataclass
 class TTSConfig:
-    backend: str = "piper"  # piper | espeak | none
+    # piper | system (macOS `say`, Windows SAPI) | espeak | none. If Piper can't load, the first of
+    # system / espeak that this machine has is used instead.
+    backend: str = "piper"
     voice_dir: str = "~/.local/share/middlemanagementd/voices"
     voice: str = "en_US-ryan-high"
     length_scale: float = 1.0
@@ -279,6 +285,10 @@ def validate(cfg: Config) -> None:
         raise ValueError("audio.max_volume must be in (0, 1]")
     if cfg.audio.echo_cancel not in ("none", "pipewire"):
         raise ValueError("audio.echo_cancel must be 'none' or 'pipewire'")
+    if cfg.audio.backend not in ("auto", "pulse", "portaudio"):
+        raise ValueError("audio.backend must be 'auto', 'pulse' or 'portaudio'")
+    if cfg.tts.backend not in ("piper", "system", "espeak", "none"):
+        raise ValueError("tts.backend must be 'piper', 'system', 'espeak' or 'none'")
     if cfg.evaluation.difficulty not in cfg.evaluation.pass_thresholds:
         raise ValueError(f"evaluation.difficulty must be one of {sorted(cfg.evaluation.pass_thresholds)}")
     if not 0.0 <= cfg.evaluation.llm_weight <= 1.0:

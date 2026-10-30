@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import signal
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime
@@ -618,12 +617,12 @@ class ManagementConsole(App[None]):
 
 
 def run(cfg: Config) -> int:
-    from .cli import api, signal_audio_client, start_background
+    from .cli import api, audio_client_command, start_background
 
     app = ManagementConsole(
         lambda method, path, body: api(cfg, method, path, body, timeout=15),
         start=lambda: start_background(cfg, with_audio=True),
-        hush_local=lambda: signal_audio_client(signal.SIGUSR1),
+        hush_local=lambda: audio_client_command("hush"),
     )
     app.sub_title = f"Corporate Alignment Enforcement Console · {cfg.server.url}"
     app.run()

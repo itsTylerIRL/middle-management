@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import getpass
+import hmac
+import json
 import logging
 import os
+import secrets
 import signal
 import socket
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -22,10 +27,22 @@ from .port import AudioSilenced, AudioUnavailable, BargeIn, ListenRequest
 log = logging.getLogger(__name__)
 
 
-def pidfile_path() -> Path:
-    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/middlemanagementd-{os.getuid()}"
-    Path(runtime).mkdir(parents=True, exist_ok=True)
-    return Path(runtime) / "middlemanagementd-audio.pid"
+def state_path() -> Path:
+    """Where a running audio client advertises its control port: {"pid", "port", "token"}."""
+    runtime = Path(os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()) / f"middlemanagementd-{getpass.getuser()}"
+    runtime.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return runtime / "audio-client.json"
+
+
+def control(command: str, timeout: float = 2.0) -> bool:
+    """Send hush / stop / ping to the local audio client. False if none is running."""
+    try:
+        state = json.loads(state_path().read_text())
+        with socket.create_connection(("127.0.0.1", int(state["port"])), timeout=timeout) as s:
+            s.sendall(f"{state['token']} {command}\n".encode())
+            return s.recv(8).startswith(b"ok")
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
 
 
 class AudioClient:
@@ -38,6 +55,7 @@ class AudioClient:
         self.ops: dict[int, asyncio.Task[None]] = {}
         self.ws: aiohttp.ClientWebSocketResponse | None = None
         self.stopping = asyncio.Event()
+        self._token = secrets.token_hex(16)
 
     # --- silencing -----------------------------------------------------------
     def hush(self) -> None:
@@ -136,19 +154,38 @@ class AudioClient:
                     await asyncio.wait_for(self.stopping.wait(), backoff)
                 backoff = min(backoff * 2, 30.0)
 
+    async def _control(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        """Local control channel (`hush`, `stop`, `ping`): the same on every OS, unlike signals."""
+        try:
+            token, _, command = (await asyncio.wait_for(reader.readline(), 2)).decode().strip().partition(" ")
+            if hmac.compare_digest(token, self._token) and command in ("hush", "stop", "ping"):
+                {"hush": self.hush, "stop": self._shutdown, "ping": lambda: None}[command]()
+                writer.write(b"ok\n")
+                await writer.drain()
+        except (OSError, TimeoutError, UnicodeDecodeError):
+            pass
+        finally:
+            writer.close()
+
     async def main(self) -> None:
         loop = asyncio.get_running_loop()
-        loop.add_signal_handler(signal.SIGUSR1, self.hush)
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, self._shutdown)
-        pid = pidfile_path()
-        pid.write_text(str(os.getpid()))
+        for sig, handler in ((getattr(signal, "SIGUSR1", None), self.hush), (signal.SIGINT, self._shutdown),
+                             (signal.SIGTERM, self._shutdown)):
+            # Not available on Windows; the control socket covers it there.
+            with contextlib.suppress(NotImplementedError, AttributeError, RuntimeError, TypeError):
+                loop.add_signal_handler(sig, handler)
+        server = await asyncio.start_server(self._control, "127.0.0.1", 0)
+        state = state_path()
+        fd = os.open(state, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump({"pid": os.getpid(), "port": server.sockets[0].getsockname()[1], "token": self._token}, f)
         try:
             await self.run()
         finally:
+            server.close()
             self.engine.close()
             with contextlib.suppress(FileNotFoundError):
-                pid.unlink()
+                state.unlink()
 
     def _shutdown(self) -> None:
         self.engine.kill_all()

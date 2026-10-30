@@ -45,8 +45,9 @@ scheduler:
   start_paused: false
 
 audio:                            # read by the audio client
-  output_device: default          # a PulseAudio/PipeWire sink name, see `middlemanagementd test-audio`
-  input_device: default           # a source name
+  backend: auto                   # auto (paplay/parecord on Linux, PortAudio elsewhere) | pulse | portaudio
+  output_device: default          # see `middlemanagementd test-audio`: a sink name (pulse), part of a name (portaudio)
+  input_device: default           # likewise for the microphone
   volume: 0.6
   max_volume: 0.85                # hard cap, enforced client-side (relative to the system volume)
   chime_gain: 1.0
@@ -60,7 +61,7 @@ audio:                            # read by the audio client
   barge_in: true
   barge_in_ratio: 1.5             # how far above predicted echo + noise you must be
   barge_in_min_seconds: 0.35      # ...for this long
-  echo_cancel: none               # none | pipewire (loads module-echo-cancel at runtime, unloaded on exit)
+  echo_cancel: none               # none | pipewire (Linux + pulse: loads module-echo-cancel, unloaded on exit)
 
 listen:
   speech_timeout_seconds: 60      # longest status report accepted
@@ -72,7 +73,7 @@ listen:
   max_threshold: 0.15             # ... but never more than this
 
 tts:
-  backend: piper                  # piper | espeak | none
+  backend: piper                  # piper | system (macOS say, Windows SAPI) | espeak | none; falls back if Piper fails
   voice_dir: ~/.local/share/middlemanagementd/voices
   voice: en_US-ryan-high
   length_scale: 1.0               # >1 slower, <1 faster (personalities adjust this too)

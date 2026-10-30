@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "middlemanagementd"
-version = "0.2.0"
+version = "0.3.0"
 description = "Corporate Alignment Enforcement Daemon: demands verbal status reports and grades your synergy."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -43,6 +43,11 @@ Changelog = "https://github.com/itsTylerIRL/middle-management/blob/main/CHANGELO
 audio = [
     "faster-whisper>=1.0",
     "piper-tts>=1.2",
+    # PortAudio, bundled on macOS and Windows: the audio backend there (Linux uses paplay/parecord when present).
+    "sounddevice>=0.4.6",
+    # onnxruntime (needed by both of the above) stopped shipping Intel Mac and macOS 13 wheels after 1.23;
+    # without this pin pip backtracks for a very long time looking for one. (Darwin 23 = macOS 14.)
+    "onnxruntime<1.24; sys_platform == 'darwin' and (platform_machine == 'x86_64' or platform_release < '23')",
 ]
 dev = [
     "pytest>=8.0",

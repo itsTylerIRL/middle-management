@@ -6,10 +6,10 @@
  │ middlemanagementd serve                 │        │ middlemanagementd audio-client          │
  │                                         │  WS    │                                        │
  │  Scheduler ──► Daemon ──► Interrogation │◄──────►│  AudioClient ──► AudioEngine           │
- │   (quiet hrs,    │         Runner       │ /ws/   │   (ops, cancel,    ├─ Player  (paplay)  │
- │    pause, kill)  │           │          │ audio  │    stop, hush)     ├─ Recorder(parecord)│
+ │   (quiet hrs,    │         Runner       │ /ws/   │   (ops, cancel,    ├─ Player/Recorder  │
+ │    pause, kill)  │           │          │ audio  │    stop, hush)     │  (pulse|PortAudio)│
  │                  │           ├─ Evaluator ──┐   │        │           ├─ VAD (energy)      │
- │  HTTP /api/* ◄── CLI         ├─ Escalation  │   │        │           ├─ TTS (Piper/espeak)│
+ │  HTTP /api/* ◄── CLI         ├─ Escalation  │   │        │           ├─ TTS (Piper/OS)    │
  │                  │           └─ Store (SQLite) │        │           └─ STT (faster-whisper)│
  └──────────────────┼──────────────────────────┼───┘        └────────────────────────────────────────┘
                     │                          │ HTTP (OpenAI-compatible)
@@ -47,7 +47,8 @@ For a single machine, `middlemanagementd serve --local-audio` runs the same engi
 | `audio/port.py` | `AudioPort` protocol + Local / Console / Mock adapters |
 | `audio/engine.py` | The real thing: chime, hold music, say (with barge-in), listen (VAD → STT) |
 | `audio/echo.py` | Echo model, calibration, barge-in detector |
-| `audio/client.py` | WebSocket client that executes ops; local hush via SIGUSR1 |
+| `audio/devices.py` | Playback/capture backends: `pulse` (paplay/parecord subprocesses) and `portaudio` (sounddevice streams, resampled to the device's rate) |
+| `audio/client.py` | WebSocket client that executes ops; local `hush`/`stop`/`ping` over a token-protected localhost control socket |
 | `cli.py` | Rich terminal commands over the HTTP API |
 | `tui.py` | Textual management console over the same API |
 | `render.py` | Rich renderables shared by both |
@@ -84,14 +85,15 @@ the store rebuilds streaks, buzzword counts and escalation, and emits `history_c
 | Mechanism | Scope |
 |---|---|
 | `middlemanagementd kill` | Persisted kill switch: client gets `stop`, the session task is cancelled, the scheduler halts, and triggers are refused until `revive`. Survives restarts. |
-| `middlemanagementd hush` | SIGUSR1 to the local audio client (works with the daemon down), plus `kill` if reachable |
+| `middlemanagementd hush` | `hush` over the local audio client's control socket (works with the daemon down, on every OS), plus `kill` if reachable |
 | Audio client disconnect | The client kills all audio when it loses the daemon |
-| `systemctl --user stop middlemanagementd-audio` | SIGTERM kills all audio subprocesses |
+| `stop --audio` / `systemctl --user stop middlemanagementd-audio` | The client kills all audio and exits |
 | Ctrl-C on `trigger` | Only stops following; the session continues (use `hush`) |
 | Hard caps | `max_volume` enforced client-side; `max_utterance_seconds` per playback; `monologue_max_seconds`; listen wall-clock limit |
 
-Every sound is a `paplay` subprocess fed in 250 ms chunks, so cancelling means SIGKILL, and silence
-follows within one audio buffer.
+With the pulse backend every sound is a `paplay` subprocess fed in 250 ms chunks, so cancelling means SIGKILL.
+With PortAudio every stream's callback checks a kill flag and aborts. Either way, silence follows within one
+audio buffer.
 
 ## Extending
 

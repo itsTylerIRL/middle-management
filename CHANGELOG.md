@@ -3,6 +3,30 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-10-29
+
+Runs on macOS and Windows as well as Linux, speech included.
+
+### Added
+
+- **PortAudio audio backend** (via `sounddevice`, bundled on macOS and Windows), chosen automatically where
+  `paplay`/`parecord` aren't available (`audio.backend: auto | pulse | portaudio`). Audio is resampled to each
+  device's native rate, and the kill switch aborts streams within one buffer, as with the pulse backend.
+- **OS voice fallback** (`tts.backend: system`): macOS `say` or Windows SAPI when no Piper voice is available.
+- Tests run on Linux, macOS and Windows in GitHub Actions, including installing the `audio` extra.
+
+### Changed
+
+- `hush`, `stop --audio` and the console's hush reach the audio client through a token-protected localhost
+  control socket instead of Unix signals, so they work on every OS. Restart a running audio client after
+  updating so the new commands can reach it.
+- `start` detaches properly on Windows.
+
+### Fixed
+
+- Installing the `audio` extra on an Intel Mac or macOS 13 no longer sends pip into a long dependency backtrack:
+  `onnxruntime` is pinned to its last release that supports them (use Python 3.12 or 3.13 there).
+
 ## [0.2.0] - 2026-10-29
 
 Upgrading from 0.1.0: this release adds `update`, so pull it by hand once
@@ -53,5 +77,6 @@ First public release.
 - CLI: `status`, `trigger`, `stats`, `history`, `review`, `rehearse` (typed practice), `evaluate`, `test-audio`,
   `download-models`, `config --init`; systemd user units.
 
+[0.3.0]: https://github.com/itsTylerIRL/middle-management/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/itsTylerIRL/middle-management/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/itsTylerIRL/middle-management/releases/tag/v0.1.0

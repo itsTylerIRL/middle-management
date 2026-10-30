@@ -1,4 +1,4 @@
-"""Text-to-speech (Piper, espeak-ng fallback) and speech recognition (faster-whisper)."""
+"""Text-to-speech (Piper; the OS voice or espeak-ng as fallbacks) and speech recognition (faster-whisper)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,10 @@ import io
 import logging
 import shutil
 import subprocess
+import sys
+import tempfile
 import wave
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -17,6 +20,19 @@ from ..logs import event
 from .port import AudioUnavailable
 
 log = logging.getLogger(__name__)
+
+# Windows' built-in voice via SAPI. The text arrives on stdin, so nothing needs quoting.
+_SAPI = ("Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+         "$s.Rate = {rate}; $s.SetOutputToWaveFile('{path}'); $s.Speak([Console]::In.ReadToEnd()); $s.Dispose()")
+
+
+def system_voice_available() -> bool:
+    return ((sys.platform == "darwin" and shutil.which("say") is not None)
+            or (sys.platform == "win32" and shutil.which("powershell") is not None))
+
+
+def fallback_backend() -> str:
+    return "system" if system_voice_available() else "espeak" if shutil.which("espeak-ng") else "none"
 
 
 def _wav_to_float(data: bytes) -> tuple[np.ndarray, int]:
@@ -49,7 +65,7 @@ class TTS:
             self._voice = PiperVoice.load(str(model))
             event(log, "piper voice loaded", voice=self.cfg.voice)
         except Exception as e:  # noqa: BLE001 - any failure here means "use the fallback"
-            fallback = "espeak" if shutil.which("espeak-ng") else "none"
+            fallback = fallback_backend()
             event(log, "piper unavailable, falling back", logging.WARNING, error=repr(e)[:200], fallback=fallback)
             self.backend = fallback
 
@@ -67,10 +83,26 @@ class TTS:
                              capture_output=True, timeout=60, check=True).stdout
         return _wav_to_float(out)
 
+    def _synth_system(self, text: str, length_scale: float) -> tuple[np.ndarray, int]:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "speech.wav"
+            if sys.platform == "darwin":
+                wpm = int(185 / max(0.5, length_scale))
+                subprocess.run(["say", "-r", str(wpm), "-o", str(out), "--data-format=LEI16@22050", text],
+                               capture_output=True, timeout=60, check=True)
+            else:
+                rate = max(-10, min(10, round((1 / max(0.5, length_scale) - 1) * 10)))
+                script = _SAPI.format(rate=rate, path=str(out).replace("'", "''"))
+                subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], input=text.encode(),
+                               capture_output=True, timeout=60, check=True)
+            return _wav_to_float(out.read_bytes())
+
     async def synthesize(self, text: str, length_scale: float | None = None) -> tuple[np.ndarray, int]:
         ls = (length_scale or 1.0) * self.cfg.length_scale
         if self.backend == "piper" and self._voice is not None:
             return await asyncio.to_thread(self._synth_piper, text, ls)
+        if self.backend == "system" and system_voice_available():
+            return await asyncio.to_thread(self._synth_system, text, ls)
         if self.backend == "espeak":
             return await asyncio.to_thread(self._synth_espeak, text, ls)
         raise AudioUnavailable("no TTS backend available")
