@@ -1,5 +1,6 @@
 """TUI behaviour against a fake daemon API, headless via Textual's pilot."""
 
+import io
 import os
 import time
 from typing import Any
@@ -95,7 +96,8 @@ class FakeDaemon:
 def text_of(app: ManagementConsole, wid: str) -> str:
     from rich.console import Console
 
-    console = Console(width=100, record=True)
+    # Render into memory: a recording Console still echoes to stdout, which on Windows CI is cp1252.
+    console = Console(file=io.StringIO(), width=100, record=True)
     console.print(app.query_one(wid, Static).content)
     return console.export_text()
 
@@ -176,7 +178,7 @@ async def test_offline_then_start():
 def test_escalation_ladder_marks_current_level():
     from rich.console import Console
 
-    c = Console(width=60, record=True)
+    c = Console(file=io.StringIO(), width=60, record=True)
     c.print(escalation_renderable(4))
     out = c.export_text()
     assert "▶" in out.splitlines()[1] and "Corporate Meltdown" in out.splitlines()[1]
@@ -185,7 +187,7 @@ def test_escalation_ladder_marks_current_level():
 def test_reputation_at_top_rank():
     from rich.console import Console
 
-    c = Console(width=60, record=True)
+    c = Console(file=io.StringIO(), width=60, record=True)
     c.print(reputation_renderable(STATS | {"rank_number": 8, "rank": "Global Thought Leadership Evangelist",
                                            "synergy_points": 600}))
     assert "nowhere left to ascend" in c.export_text()

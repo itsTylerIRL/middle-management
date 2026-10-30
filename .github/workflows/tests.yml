@@ -23,4 +23,7 @@ jobs:
         run: python -m pip install -e ".[audio,dev]"
         timeout-minutes: 10
       - name: Test
-        run: python -m pytest -q
+        # The annotate plugin turns failures into annotations, readable without access to the logs.
+        run: |
+          python -m pip install pytest-github-actions-annotate-failures
+          python -m pytest -q
